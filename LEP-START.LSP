@@ -144,6 +144,7 @@
 (princ "\n Команды:")
 (princ "\n LEP-SETUP")
 (princ "\n LEP-ROUTE")
+(princ "\n LEP-ROUTEVIS")
 (princ "\n LEP-POLE")
 (princ "\n LEP-SPAN")
 (princ "\n LEP-SCALE")

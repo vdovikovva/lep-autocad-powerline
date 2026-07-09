@@ -90,20 +90,31 @@
 ; LEP:EnsureLinetypeLoaded
 ;
 ; Проверяет, что нужный тип линии загружен в чертёж (например
-; "DASHED" для КЛ), и подгружает его из acad.lin, если ещё не
-; загружен. "CONTINUOUS" всегда есть по умолчанию, для него ничего
-; делать не нужно.
+; "LEP_CABLE" для КЛ), и подгружает его из файла LtFile, если ещё не
+; загружен. LtFile ищется через findfile (Support Path/папка с
+; модулями), путь не хардкодится - см. правило проекта в CLAUDE.md.
+; "CONTINUOUS" всегда есть по умолчанию, для него ничего делать не
+; нужно.
 ;=====================================================================
- 
-(defun LEP:EnsureLinetypeLoaded (LtName / OldFiledia)
+
+(defun LEP:EnsureLinetypeLoaded (LtName LtFile / OldFiledia FullPath)
     (if (and (/= LtName "CONTINUOUS") (not (tblsearch "LTYPE" LtName)))
         (progn
             ;; FILEDIA=1 (по умолчанию) открывает GUI-диалог выбора файла
             ;; вместо текстового промпта на шаге "Select linetype file" -
-            ;; тогда "acad.lin" уходит не туда и ломает очередь command.
+            ;; тогда LtFile уходит не туда и ломает очередь command.
             (setq OldFiledia (getvar "FILEDIA"))
             (setvar "FILEDIA" 0)
-            (command "_.-linetype" "_Load" LtName "acad.lin" "")
+
+            (setq FullPath (findfile LtFile))
+            (if (not FullPath)
+                (progn
+                    (princ (strcat "\n[LEP-SPAN] Не найден файл типов линий: " LtFile " - положите его в папку с модулями LEP."))
+                    (setq FullPath LtFile)
+                )
+            )
+
+            (command "_.-linetype" "_Load" LtName FullPath "")
             (setvar "FILEDIA" OldFiledia)
         )
     )
@@ -292,7 +303,7 @@
 ;=====================================================================
  
 (defun C:LEP-SPAN (/ Route Verts P1 P2 Idx1 Idx2 SubVerts LineType WireList WireChoice
-                     LayerName LtName SpanEnt SpanLength OldOs OldError LEP-CatchResult)
+                     LayerName LtName LtFile SpanEnt SpanLength OldOs OldError LEP-CatchResult)
  
     (setq OldError *error*)
     (defun *error* (msg)
@@ -365,16 +376,18 @@
                                                             (setq WireList *LEP-WireTypes-VL*)
                                                             (setq LayerName *LEP-Layer-Proj-VL*)
                                                             (setq LtName "CONTINUOUS")
+                                                            (setq LtFile "")
                                                         )
                                                         (progn
                                                             (setq WireList *LEP-WireTypes-KL*)
                                                             (setq LayerName *LEP-Layer-Proj-KL*)
-                                                            (setq LtName "DASHED")
+                                                            (setq LtName *LEP-Linetype-KL*)
+                                                            (setq LtFile *LEP-LinetypeFile-KL*)
                                                         )
                                                     )
                                                     (princ (strcat "\n[DEBUG 6] LtName=" LtName " LayerName=" LayerName))
 
-                                                    (LEP:EnsureLinetypeLoaded LtName)
+                                                    (LEP:EnsureLinetypeLoaded LtName LtFile)
                                                     (princ "\n[DEBUG 7] После EnsureLinetypeLoaded")
 
                                                     ;; Марка провода/кабеля - список из CONFIG
