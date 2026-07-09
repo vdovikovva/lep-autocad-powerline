@@ -326,13 +326,15 @@
                         '(lambda ()
  
                             (setq P2 (LEP:PickPole "\nВторая опора пролёта: "))
- 
+                            (princ (strcat "\n[DEBUG 1] P2 = " (vl-princ-to-string P2)))
+
                             (if P2
                                 (progn
                                     ;; Находим ближайшие вершины маршрута к P1 и P2
                                     (setq Idx1 (LEP:GetNearestVertexIndex Verts P1))
                                     (setq Idx2 (LEP:GetNearestVertexIndex Verts P2))
- 
+                                    (princ (strcat "\n[DEBUG 2] Idx1=" (itoa Idx1) " Idx2=" (itoa Idx2)))
+
                                     ;; Берём подсписок вершин между ними (по возрастанию индекса)
                                     (if (> Idx1 Idx2)
                                         (progn (setq Idx1 (LEP:GetNearestVertexIndex Verts P2))
@@ -341,10 +343,12 @@
                                     (setq SubVerts
                                         (LEP:SubList Verts Idx1 Idx2)
                                     )
- 
+                                    (princ (strcat "\n[DEBUG 3] SubVerts len=" (itoa (length SubVerts))))
+
                                     (if (< (length SubVerts) 2)
                                         (princ "\n[LEP-SPAN] Между этими точками нет отдельного участка маршрута - пропускаю.")
                                         (progn
+                                            (princ "\n[DEBUG 4] Перед ChooseFromList (тип прокладки)")
                                             ;; Тип прокладки
                                             (setq LineType
                                                 (LEP:ChooseFromList
@@ -352,7 +356,8 @@
                                                     "Тип прокладки"
                                                 )
                                             )
- 
+                                            (princ (strcat "\n[DEBUG 5] LineType = " (vl-princ-to-string LineType)))
+
                                             (if LineType
                                                 (progn
                                                     (if (= (cdr LineType) "VL")
@@ -367,17 +372,21 @@
                                                             (setq LtName "DASHED")
                                                         )
                                                     )
- 
+                                                    (princ (strcat "\n[DEBUG 6] LtName=" LtName " LayerName=" LayerName))
+
                                                     (LEP:EnsureLinetypeLoaded LtName)
- 
+                                                    (princ "\n[DEBUG 7] После EnsureLinetypeLoaded")
+
                                                     ;; Марка провода/кабеля - список из CONFIG
                                                     (setq WireChoice (LEP:ChooseFromList WireList "Марка провода/кабеля"))
- 
+                                                    (princ (strcat "\n[DEBUG 8] WireChoice = " (vl-princ-to-string WireChoice)))
+
                                                     (if WireChoice
                                                         (progn
                                                             (setq SpanEnt (LEP:CreateSpanEntity SubVerts LayerName LtName))
                                                             (setq Length (LEP:GetSpanLength SubVerts))
- 
+                                                            (princ (strcat "\n[DEBUG 9] SpanEnt=" (vl-princ-to-string SpanEnt) " Length=" (rtos Length 2 3)))
+
                                                             ;; Данные для ведомости: марка, сечение, точная длина
                                                             (LEP:SetData SpanEnt
                                                                 (list
@@ -387,8 +396,10 @@
                                                                     (cons "LENGTH" (rtos Length 2 3))
                                                                 )
                                                             )
- 
+                                                            (princ "\n[DEBUG 10] После SetData, перед CreateSpanLabel")
+
                                                             (LEP:CreateSpanLabel SubVerts (car WireChoice) Length)
+                                                            (princ "\n[DEBUG 11] После CreateSpanLabel - пролёт готов")
                                                         )
                                                     )
                                                 )
