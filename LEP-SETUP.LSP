@@ -87,10 +87,27 @@
 ; командой LEP-ROUTEVIS перед печатью, на бумаге он всё равно не
 ; появится.
 ;
+; Правим DXF-запись слоя напрямую через entmod (группа 290 = флаг
+; печати, 0 = не печатать) - а не через (command "-layer" "Plot" ...):
+; порядок промптов у этой команды в разных версиях AutoCAD отличается
+; (то ли сначала спрашивает имя слоя, то ли Yes/No), а мы уже дважды
+; ловили баги именно на неправильном порядке аргументов у command
+; (LEADER, -linetype). entmod детерминирован и не зависит от версии.
+;
 ;=====================================================================
 
-(defun LEP:SetLayerNoPlot (LayerName /)
-    (command "_.-layer" "_Plot" "_No" LayerName "")
+(defun LEP:SetLayerNoPlot (LayerName / LayerEnt LayerData)
+    (setq LayerEnt (tblobjname "LAYER" LayerName))
+    (if LayerEnt
+        (progn
+            (setq LayerData (entget LayerEnt))
+            (if (assoc 290 LayerData)
+                (setq LayerData (subst (cons 290 0) (assoc 290 LayerData) LayerData))
+                (setq LayerData (append LayerData (list (cons 290 0))))
+            )
+            (entmod LayerData)
+        )
+    )
 )
 
 
