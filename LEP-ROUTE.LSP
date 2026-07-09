@@ -38,6 +38,44 @@
 ;=====================================================================
 
 
+;=====================================================================
+;
+; LEP:CreateRouteLabel
+;
+; Подпись "Маршрут NN" у начальной точки только что нарисованного
+; маршрута - чтобы на чертеже было видно, где какой маршрут, а не
+; только внутри XDATA (снаружи это раньше было никак не отличить).
+; NN - последние 2 символа RouteID (сам ID теперь короткий, 2 цифры,
+; см. LEP:CreateRouteID в LEP-DATA.LSP).
+;
+;=====================================================================
+
+(defun LEP:CreateRouteLabel (Point RouteID / TextPoint OldLayer LabelText Num)
+
+    (setq OldLayer (getvar "CLAYER"))
+    (LEP:SetCurrentLayer *LEP-Layer-Text*)
+
+    (setq Num (substr RouteID (- (strlen RouteID) 1)))
+    (setq LabelText (strcat "Маршрут " Num))
+
+    (setq TextPoint
+        (list
+            (+ (car Point) *LEP-LeaderOffset*)
+            (+ (cadr Point) *LEP-LeaderOffset*)
+        )
+    )
+
+    ;; После двух точек LEADER просит 3 ответа: пусто (закончить
+    ;; линию), текст, пусто (закончить текст) - НЕ 4 (см. фикс этой
+    ;; же ошибки в LEP-SPAN.LSP/LEP:CreateSpanLabel - лишний "" уводит
+    ;; в подменю [Tolerance/Copy/Mtext/...], а текст подписи прилетает
+    ;; туда невалидным ключевым словом).
+    (command "_.LEADER" Point TextPoint "" LabelText "")
+
+    (setvar "CLAYER" OldLayer)
+)
+
+
 (defun C:LEP-ROUTE
 
     (
@@ -49,6 +87,8 @@
         RouteEnt
 
         RouteID
+
+        StartPt
 
     )
 
@@ -127,6 +167,16 @@
                 )
 
             )
+
+
+
+            ;-------------------------------------------------------
+            ; Подпись "Маршрут NN" у начальной точки - чтобы было
+            ; видно на чертеже, а не только в XDATA.
+            ;-------------------------------------------------------
+
+            (setq StartPt (car (LEP:GetVertices RouteEnt)))
+            (LEP:CreateRouteLabel StartPt RouteID)
 
 
 
