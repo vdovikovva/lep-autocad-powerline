@@ -220,44 +220,21 @@
 ; LEP:GetPoleType-CmdLine
 ;
 ; Запасной способ выбора типа опоры - через командную строку,
-; номером. Используется, если DCL-диалог недоступен/не открылся.
+; номером. Используется, если DCL-диалог недоступен/не открылся
+; (а с недавних пор - как основной способ, см. *LEP-UseDCL* в
+; CONFIG). Само меню (построение списка номер-название, столбиком)
+; теперь общее с выбором марки провода/кабеля в LEP-SPAN - см.
+; LEP:ChooseFromList в LEP-UTILS.LSP, чтобы не держать два разных
+; места с одной и той же логикой.
 ;
 ; Возвращает: строку с типом опоры, либо nil при отмене (Esc).
 ;=====================================================================
- 
-(defun LEP:GetPoleType-CmdLine (/ MenuText i Item Choice Result Valid)
- 
-    (setq MenuText "")
-    (setq i 1)
- 
-    (foreach Item *LEP-PoleTypes*
-        (setq MenuText (strcat MenuText (itoa i) "-" (car Item) "  "))
-        (setq i (1+ i))
+
+(defun LEP:GetPoleType-CmdLine (/ Result)
+    (setq Result (LEP:ChooseFromList *LEP-PoleTypes* "Номер опоры"))
+    (if Result
+        (car Result)
     )
- 
-    (setq Result nil)
-    (setq Valid nil)
- 
-    (while (not Valid)
- 
-        (initget 6) ; запрещаем 0 и отрицательные (Esc/пусто - отмена)
-        (setq Choice (getint (strcat "\n" MenuText "\nНомер опоры: ")))
- 
-        (cond
-            ((not Choice)
-             (setq Valid T)
-            )
-            ((or (< Choice 1) (> Choice (length *LEP-PoleTypes*)))
-             (princ "\nНет такого номера в списке, попробуйте ещё раз.")
-            )
-            (t
-             (setq Result (car (nth (1- Choice) *LEP-PoleTypes*)))
-             (setq Valid T)
-            )
-        )
-    )
- 
-    Result
 )
  
  

@@ -42,50 +42,12 @@
 ;=====================================================================
  
  
-;=====================================================================
-; LEP:ChooseFromList
-;
-; Универсальный выбор одного пункта из списка (car Item) - номером
-; в командной строке, с проверкой диапазона и повторным запросом.
-; Используется и для типа линии, и для марки провода.
-;=====================================================================
- 
-(defun LEP:ChooseFromList (ItemList PromptText / MenuText i Item Choice Result Valid)
- 
-    (setq MenuText "")
-    (setq i 1)
- 
-    (foreach Item ItemList
-        (setq MenuText (strcat MenuText (itoa i) "-" (car Item) "  "))
-        (setq i (1+ i))
-    )
- 
-    (setq Result nil)
-    (setq Valid nil)
- 
-    (while (not Valid)
- 
-        (initget 6)
-        (setq Choice (getint (strcat "\n" MenuText "\n" PromptText ": ")))
- 
-        (cond
-            ((not Choice)
-             (setq Valid T)
-            )
-            ((or (< Choice 1) (> Choice (length ItemList)))
-             (princ "\nНет такого номера, попробуйте ещё раз.")
-            )
-            (t
-             (setq Result (nth (1- Choice) ItemList))
-             (setq Valid T)
-            )
-        )
-    )
- 
-    Result
-)
- 
- 
+;; LEP:ChooseFromList перенесена в LEP-UTILS.LSP (используется и
+;; здесь, и в LEP-POLE.LSP для списка типов опор - раньше была тут
+;; в одном экземпляре, теперь общая).
+
+
+
 ;=====================================================================
 ; LEP:EnsureLinetypeLoaded
 ;
