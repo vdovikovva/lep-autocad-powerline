@@ -271,9 +271,9 @@
 ; точки (на первом клике пары) - выход из цикла.
 ;=====================================================================
  
-(defun C:LEP-SPAN (/ Route Verts P1 P2 Idx1 Idx2 SubVerts LineType WireList WireChoice
+(defun C:LEP-SPAN (/ Route RouteID Verts P1 P2 Idx1 Idx2 SubVerts LineType WireList WireChoice
                      LayerName LtName LtFile SpanEnt SpanLength Status OldOs OldError LEP-CatchResult)
- 
+
     (setq OldError *error*)
     (defun *error* (msg)
         (if OldOs (setvar "OSMODE" OldOs))
@@ -281,13 +281,18 @@
         (princ (strcat "\nКоманда прервана: " msg))
         (princ)
     )
- 
+
     (LEP:PrintHeader "Обработка пролётов и подписи")
- 
+
     (setq Route (car (entsel "\nВыберите полилинию маршрута: ")))
- 
+
     (if Route
         (progn
+            ;; ID трассы - записываем его же в XDATA каждого пролёта
+            ;; (ключ "ROUTE"), чтобы LEP-REPORT потом мог сгруппировать
+            ;; метраж провода/кабеля по трассам - раньше пролёты вообще
+            ;; не хранили, к какой трассе относятся (в отличие от опор).
+            (setq RouteID (LEP:GetDataValue Route "ID"))
             (setq Verts (LEP:GetVertexList Route))
  
             (setq OldOs (getvar "OSMODE"))
@@ -372,10 +377,11 @@
                                                             (setq SpanLength (LEP:GetSpanLength SubVerts))
                                                             (princ (strcat "\n[DEBUG 9] SpanEnt=" (vl-princ-to-string SpanEnt) " Length=" (rtos SpanLength 2 3)))
 
-                                                            ;; Данные для ведомости: статус, марка, сечение, точная длина
+                                                            ;; Данные для ведомости: трасса, статус, марка, сечение, длина
                                                             (LEP:SetData SpanEnt
                                                                 (list
                                                                     (cons "TYPE" "SPAN")
+                                                                    (cons "ROUTE" RouteID)
                                                                     (cons "STATUS" Status)
                                                                     (cons "WIRE" (car WireChoice))
                                                                     (cons "SECTION" (cdr WireChoice))

@@ -1,80 +1,200 @@
 ;=====================================================================
 ; ПРОЕКТ:       LEP (Автоматизация проектирования ЛЭП)
 ; ФАЙЛ:         LEP-REPORT.LSP
-; ВЕРСИЯ:       0.4
-; НАЗНАЧЕНИЕ:   Полностью автоматический сбор объемов материалов 
-;               (чистые длины линий без округления и штучные опоры) 
-;               с разделением по ID трасс и экспортом в формат CSV.
+; ВЕРСИЯ:       0.5  (переписана без ActiveX - Claude)
+;
+; ПЕРЕДЕЛАНО ПОЛНОСТЬЮ:
+; Старая версия использовала ActiveX (vl-load-com, vla-get-length,
+; vla-get-EffectiveName) - это работает ТОЛЬКО на Windows, на Mac
+; вызов vl-load-com сразу падает с ошибкой ("not supported"), и
+; команда вообще не запускалась. Заменено на чтение уже готовых
+; данных из XDATA (LEP:GetDataValue) - её и так пишут LEP-POLE и
+; LEP-SPAN при создании каждого объекта:
+;   - длина пролёта - берётся из XDATA ("LENGTH", посчитана один раз
+;     геометрически в LEP-SPAN при создании), а не пересчитывается
+;     через vla-get-length;
+;   - тип опоры - берётся из XDATA ("MODEL"), а не из имени блока
+;     через vla-get-EffectiveName (у которой была своя задача -
+;     распознавать динамические блоки с анонимными именами *U... -
+;     нам это не нужно, у нас и так есть свой явный тип в XDATA).
+; Полностью кроссплатформенно, без единого vl-*/vla-* вызова.
+;
+; ТОЛЬКО ПРОЕКТИРУЕМЫЕ ОБЪЕКТЫ:
+; В ведомость попадают только опоры/пролёты со статусом "Проект."
+; (XDATA "STATUS" = "PROJECT") - существующие (Сущ.) уже стоят на
+; месте, их не нужно ни покупать, ни строить, поэтому в черновую
+; ведомость на закупку/прикидку они не включаются.
+;
+; СТРУКТУРА CSV:
+; Сначала блок по каждой трассе отдельно (проектировщику удобно
+; видеть, сколько опор/провода нужно именно на эту линию - на одном
+; чертеже бывает несколько трасс к разным заявителям), затем блок
+; "ИТОГО" - сумма по всем трассам вместе (это уже для закупки, ей
+; обычно не важно, на какую именно линию идёт материал).
+;
+; НАЗНАЧЕНИЕ: Сбор объёмов материалов и опор (без округления) с
+; разделением по трассам и экспортом в CSV.
 ;=====================================================================
 
-(defun C:LEP-REPORT ( /  ; Список локальных переменных для защиты памяти
-                        VL-SS KL-SS PoleSS CsvPath CsvFile i Ent VlaObj 
-                        Len Layer Name XData ResID PoleList Item 
-                        MasterList RouteID FoundRoute FoundPole 
-                        FileCheck )
-    
-    ; Подключаем базовые функции Visual LISP (ActiveX) для расширенной работы с объектами
-    (vl-load-com)
-    
-    ; Выводим стандартное текстовое приветствие из LEP-UTILS
-    (LEP:PrintHeader "Автоматическая выгрузка ведомости в CSV")
 
-    ;-----------------------------------------------------------------
-    ; СТРУКТУРА ДАННЫХ (MasterList):
-    ; Хранит агрегированные данные в виде вложенных списков по каждой трассе:
-    ; (
-    ;   ("LEP_ROUTE_1" . ( ("LineLen" . 145.62) ("П20-3Н" . 4) ("А23" . 1) ))
-    ;   ("LEP_ROUTE_2" . ( ("LineLen" . 89.11)  ("П23" . 3) ))
-    ; )
-    ;-----------------------------------------------------------------
+;=====================================================================
+; LEP:AddToMasterList
+;
+; Добавляет значение (Value) под именем материала (ItemName) в общий
+; список MasterList, сгруппированный по трассам (RouteID). Если такая
+; трасса/материал уже встречались - значение прибавляется к тому, что
+; уже накоплено (счётчик опор или метраж провода/кабеля - смотря что
+; передали).
+;
+; Структура MasterList:
+; (
+;   (RouteID . ( (ItemName . (Value . Unit)) (ItemName . (Value . Unit)) ... ))
+;   ...
+; )
+;
+; Unit - строка единицы измерения ("шт." для опор, "м." для провода/
+; кабеля) - хранится вместе со значением, чтобы при выводе в CSV не
+; гадать, как форматировать число (штуки - целым, метры - с двумя
+; знаками после запятой).
+;
+; Возвращает: обновлённый MasterList.
+;=====================================================================
+
+(defun LEP:AddToMasterList (MasterList RouteID ItemName Value Unit / FoundRoute ItemList FoundItem OldValue)
+
+    (setq FoundRoute (assoc RouteID MasterList))
+
+    (if FoundRoute
+        (progn
+            (setq ItemList (cdr FoundRoute))
+            (setq FoundItem (assoc ItemName ItemList))
+            (if FoundItem
+                (progn
+                    (setq OldValue (car (cdr FoundItem)))
+                    (setq ItemList (subst (cons ItemName (cons (+ OldValue Value) Unit)) FoundItem ItemList))
+                )
+                (setq ItemList (append ItemList (list (cons ItemName (cons Value Unit)))))
+            )
+            (setq MasterList (subst (cons RouteID ItemList) FoundRoute MasterList))
+        )
+        (setq MasterList (append MasterList (list (cons RouteID (list (cons ItemName (cons Value Unit)))))))
+    )
+
+    MasterList
+)
+
+
+;=====================================================================
+; LEP:MergeMasterList
+;
+; Сводит данные всех трасс из MasterList в ОДИН общий список
+; (ItemName . (Value . Unit)) - без разбивки по трассам. Это и есть
+; блок "ИТОГО" для закупки.
+;=====================================================================
+
+(defun LEP:MergeMasterList (MasterList / Merged RouteItem ItemList Item FoundItem OldValue)
+
+    (setq Merged nil)
+
+    (foreach RouteItem MasterList
+        (setq ItemList (cdr RouteItem))
+        (foreach Item ItemList
+            (setq FoundItem (assoc (car Item) Merged))
+            (if FoundItem
+                (progn
+                    (setq OldValue (car (cdr FoundItem)))
+                    (setq Merged (subst (cons (car Item) (cons (+ OldValue (car (cdr Item))) (cdr (cdr Item)))) FoundItem Merged))
+                )
+                (setq Merged (append Merged (list Item)))
+            )
+        )
+    )
+
+    Merged
+)
+
+
+;=====================================================================
+; LEP:WriteMasterListBlock
+;
+; Пишет в CSV-файл (File) один блок строк для одной "трассы"
+; (RouteLabel - реальный ID трассы или "ИТОГО" для сводного блока).
+; Для опор (Unit = "шт.") название дополняется префиксом "Опора " -
+; для провода/кабеля название и так самодостаточное (например
+; "СИП-2 95 мм2"), доп. префикс не нужен.
+;=====================================================================
+
+(defun LEP:WriteMasterListBlock (File RouteLabel ItemList / Item Name Value Unit ValueStr Prefix)
+
+    (foreach Item ItemList
+        (setq Name (car Item))
+        (setq Value (car (cdr Item)))
+        (setq Unit (cdr (cdr Item)))
+
+        (if (= Unit "шт.")
+            (progn
+                (setq Prefix "Опора ")
+                (setq ValueStr (itoa (fix Value)))
+            )
+            (progn
+                (setq Prefix "")
+                (setq ValueStr (rtos Value 2 2))
+            )
+        )
+
+        (write-line (strcat RouteLabel ";" Prefix Name ";" ValueStr ";" Unit) File)
+    )
+)
+
+
+;=====================================================================
+; C:LEP-REPORT - основная команда
+;=====================================================================
+
+(defun C:LEP-REPORT ( / VL-SS PoleSS i Ent RouteID Status WireName WireLength
+                        PoleName MasterList MergedList CsvPath CsvFile FileCheck RouteItem)
+
+    (LEP:PrintHeader "Выгрузка ведомости в CSV (только Проект.)")
+
     (setq MasterList nil)
 
     ;=================================================================
-    ; ЭТАП 1: СБОР И ГЕОМЕТРИЧЕСКИЙ РАСЧЕТ ЛИНЕЙНОЙ ЧАСТИ (ВЛ и КЛ)
+    ; ЭТАП 1: ПРОЕКТИРУЕМЫЕ ПРОЛЁТЫ (ВЛ и КЛ) - метраж по маркам
     ;=================================================================
-    
-    ; Формируем выборку всех легких полилиний (LWPOLYLINE) на проектных слоях ВЛ и КЛ
-    (setq VL-SS (ssget "_X" (list '(0 . "LWPOLYLINE") 
+
+    (setq VL-SS (ssget "_X" (list '(0 . "LWPOLYLINE")
                                   (cons 8 (strcat *LEP-Layer-Proj-VL* "," *LEP-Layer-Proj-KL*)))))
 
     (if VL-SS
         (progn
             (setq i 0)
-            ; Цикл перебора всех найденных кабелей и проводов
             (repeat (sslength VL-SS)
                 (setq Ent (ssname VL-SS i))
-                ; Преобразуем стандартный ename во вла-объект для доступа к ActiveX методам
-                (setq VlaObj (vlax-ename->vla-object Ent))
-                
-                ; Извлекаем чистую геометрическую длину объекта (БЕЗ ОКРУГЛЕНИЙ)
-                (setq Len (vla-get-length VlaObj))
-                
-                ; Читаем расширенные данные (XDATA) объекта, привязанные к приложению "LEP_DATA"
-                (setq XData (assoc -3 (entget Ent '("LEP_DATA"))))
-                
-                (if XData
-                    ; Если XDATA есть, вытаскиваем сохраненный уникальный ID трассы
-                    (setq RouteID (cdr (nth 4 (car (cdr XData)))))
-                    ; Если объект лежит на слое, но не размечен кодом — маркируем как потерянный
-                    (setq RouteID "НЕРАЗМЕЧЕННЫЕ_ЛИНИИ")
-                )
+                (setq Status (LEP:GetDataValue Ent "STATUS"))
 
-                ; Ищем, создана ли уже запись для этой трассы в нашем главном списке MasterList
-                (setq FoundRoute (assoc RouteID MasterList))
-                
-                (if FoundRoute
-                    ; Если трасса уже есть, извлекаем её текущую длину, прибавляем новую и обновляем список
+                (if (= Status "PROJECT")
                     (progn
-                        (setq PoleList (cdr FoundRoute))
-                        (setq FoundPole (assoc "LineLen" PoleList))
-                        (if FoundPole
-                            (setq PoleList (subst (cons "LineLen" (+ (cdr FoundPole) Len)) FoundPole PoleList))
-                            (setq PoleList (append PoleList (list (cons "LineLen" Len))))
+                        (setq RouteID (LEP:GetDataValue Ent "ROUTE"))
+                        (if (not RouteID) (setq RouteID "БЕЗ_ТРАССЫ"))
+
+                        (setq WireName (LEP:GetDataValue Ent "WIRE"))
+                        (if (not WireName) (setq WireName "МАРКА_НЕ_УКАЗАНА"))
+
+                        ;; Длина уже посчитана геометрически один раз при
+                        ;; создании пролёта в LEP-SPAN - берём готовое
+                        ;; значение из XDATA, а не пересчитываем заново.
+                        ;; (atof nil) упал бы с ошибкой и остановил всю
+                        ;; команду - на случай отсутствия данных у
+                        ;; конкретного объекта просто считаем длину 0,
+                        ;; а не роняем всю ведомость из-за одного пролёта.
+                        (setq WireLength (LEP:GetDataValue Ent "LENGTH"))
+                        (if WireLength
+                            (setq WireLength (atof WireLength))
+                            (setq WireLength 0.0)
                         )
-                        (setq MasterList (subst (cons RouteID PoleList) FoundRoute MasterList))
+
+                        (setq MasterList (LEP:AddToMasterList MasterList RouteID WireName WireLength "м."))
                     )
-                    ; Если трасса встретилась впервые, инициализируем её структуру с начальной длиной
-                    (setq MasterList (append MasterList (list (cons RouteID (list (cons "LineLen" Len))))))
                 )
                 (setq i (1+ i))
             )
@@ -82,54 +202,28 @@
     )
 
     ;=================================================================
-    ; ЭТАП 2: СБОР И АНАЛИЗ ПРОЕКТНЫХ ОПОР (ВКЛЮЧАЯ ДИНАМИЧЕСКИЕ БЛОКИ)
+    ; ЭТАП 2: ПРОЕКТИРУЕМЫЕ ОПОРЫ - количество по типам
     ;=================================================================
-    
-    ; Находим абсолютно все вхождения блоков (INSERT) на проектном слое опор
+
     (setq PoleSS (ssget "_X" (list '(0 . "INSERT") (cons 8 *LEP-Layer-Proj-Pole*))))
 
     (if PoleSS
         (progn
             (setq i 0)
-            ; Поштучно перебираем все опоры на чертеже
             (repeat (sslength PoleSS)
                 (setq Ent (ssname PoleSS i))
-                (setq VlaObj (vlax-ename->vla-object Ent))
-                
-                ; РЕШЕНИЕ ПРОБЛЕМЫ ДИНАМИЧЕСКИХ БЛОКОВ:
-                ; vla-get-EffectiveName извлекает ИСХОДНОЕ имя блока из описания, 
-                ; даже если на чертеже конкретный блок стал анонимным (*U...) из-за смены свойств видимости.
-                (setq PoleName (vla-get-EffectiveName VlaObj))
-                
-                ; Считываем XDATA опоры для определения её принадлежности к конкретной линии
-                (setq XData (assoc -3 (entget Ent '("LEP_DATA"))))
-                
-                (if XData
-                    (setq RouteID (cdr (nth 4 (car (cdr XData)))))
-                    (setq RouteID "ОПОРА_БЕЗ_ТРАССЫ")
-                )
+                (setq Status (LEP:GetDataValue Ent "STATUS"))
 
-                ; Проверяем наличие этой трассы в MasterList
-                (setq FoundRoute (assoc RouteID MasterList))
-                
-                (if FoundRoute
-                    ; Если ветка трассы создана (например, на этапе обсчета линий)
+                (if (= Status "PROJECT")
                     (progn
-                        (setq PoleList (cdr FoundRoute))
-                        ; Ищем конкретный тип опоры (например, "П20-3Н") внутри этой трассы
-                        (setq FoundPole (assoc PoleName PoleList))
-                        
-                        (if FoundPole
-                            ; Если тип опоры уже встречался на этой линии — инкрементируем счетчик (+1)
-                            (setq PoleList (subst (cons PoleName (1+ (cdr FoundPole))) FoundPole PoleList))
-                            ; Если тип опоры на этой линии новый — добавляем со значением 1
-                            (setq PoleList (append PoleList (list (cons PoleName 1))))
-                        )
-                        ; Записываем обновленный подсписок материалов обратно в главную базу данных трассы
-                        (setq MasterList (subst (cons RouteID PoleList) FoundRoute MasterList))
+                        (setq RouteID (LEP:GetDataValue Ent "ROUTE"))
+                        (if (not RouteID) (setq RouteID "БЕЗ_ТРАССЫ"))
+
+                        (setq PoleName (LEP:GetDataValue Ent "MODEL"))
+                        (if (not PoleName) (setq PoleName "ТИП_НЕ_УКАЗАН"))
+
+                        (setq MasterList (LEP:AddToMasterList MasterList RouteID PoleName 1 "шт."))
                     )
-                    ; Если опора стоит изолированно и трассы еще не было в списке — создаем новую ветку
-                    (setq MasterList (append MasterList (list (cons RouteID (list (cons PoleName 1))))))
                 )
                 (setq i (1+ i))
             )
@@ -137,72 +231,54 @@
     )
 
     ;=================================================================
-    ; ЭТАП 3: АВТОМАТИЧЕСКАЯ ЗАПИСЬ ДАННЫХ В ФАЙЛ CSV С ЗАЩИТОЙ ОТ СБОЕВ
+    ; ЭТАП 3: ЗАПИСЬ В CSV
     ;=================================================================
-    
-    ; Автоматически вычисляем путь к целевому CSV файлу в директории текущего DWG
+
     (setq CsvPath (strcat (getvar "DWGPREFIX") (vl-filename-base (getvar "DWGNAME")) "_ведомость.csv"))
-    
-    ; ЗАЩИТА ОТ БЛОКИРОВКИ EXCEL:
-    ; Пробуем открыть файл в режиме добавления ("a"). Если Excel держит файл, open вернет nil.
+
+    ;; Проверка на блокировку файла (например, открыт в Excel) - через
+    ;; попытку открыть в режиме добавления, до того как стирать файл.
     (setq FileCheck (open CsvPath "a"))
-    
+
     (if (not FileCheck)
-        ; Если файл заблокирован, прерываем выполнение и выводим громкое предупреждение
         (progn
             (princ "\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-            (princ (strcat "\n[КРИТИЧЕСКАЯ ОШИБКА]: Файл ведомости заблокирован!"))
-            (princ "\nВозможно, этот CSV файл сейчас открыт в Microsoft Excel.")
-            (princ "\nПожалуйста, закройте Excel и запустите команду LEP-REPORT снова.")
+            (princ "\n[ОШИБКА] Файл ведомости заблокирован (возможно, открыт в Excel).")
+            (princ "\nЗакройте файл и запустите LEP-REPORT снова.")
             (princ "\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
         )
         (progn
-            (close FileCheck) ; Закрываем проверочный дескриптор
-            
-            ; Открываем файл заново в режиме чистой перезаписи ("w")
+            (close FileCheck)
             (setq CsvFile (open CsvPath "w"))
-            
-            ; Записываем стандартную шапку таблицы. 
-            ; Разделитель — СТРОГО СЕМИКОЛОН (точка с запятой) для моментального открытия в русском Excel.
-            (write-line "Трасса;Наименование материала / оборудования;Количество;Ед. изм." CsvFile)
-            
-            ; Перебираем сформированную базу данных по всем трассам чертежа
+
+            (write-line "Ведомость (черновая прикидка) - только проектируемые (Проект.) объекты" CsvFile)
+            (write-line "Трасса;Материал/оборудование;Количество;Ед. изм." CsvFile)
+
+            ;; Блок по каждой трассе отдельно - для проектировщика
             (foreach RouteItem MasterList
-                (setq ResID (car RouteItem))     ; ID текущей трассы
-                (setq PoleList (cdr RouteItem))   ; Список её элементов
-                
-                ; Сначала выгружаем общую чистую длину кабельных/воздушных трасс
-                (setq FoundPole (assoc "LineLen" PoleList))
-                (if FoundPole
-                    (progn
-                        ; Для красоты определяем тип проводника по названию ID или слою.
-                        ; Выводим REAL-значение длины с точностью до 2 знаков после запятой без искажения округлением
-                        (write-line (strcat ResID ";Проводник (проектная длина согласно геометрии);" (rtos (cdr FoundPole) 2 2) ";м.") CsvFile)
-                    )
-                )
-                
-                ; Теперь выгружаем все опоры, которые жестко привязаны к этой конкретной трассе
-                (foreach Item PoleList
-                    (if (/= (car Item) "LineLen") ; Пропускаем системную переменную длины
-                        (write-line (strcat ResID ";Опора проектная типа " (car Item) ";" (itoa (cdr Item)) ";шт.") CsvFile)
-                    )
-                )
+                (LEP:WriteMasterListBlock CsvFile (car RouteItem) (cdr RouteItem))
+                (write-line "" CsvFile)
             )
-            
-            ; Закрываем файл, освобождая буфер обмена операционной системы
+
+            ;; Сводный блок "ИТОГО" по всем трассам вместе - для закупки
+            (setq MergedList (LEP:MergeMasterList MasterList))
+            (if MergedList
+                (LEP:WriteMasterListBlock CsvFile "ИТОГО" MergedList)
+            )
+
             (close CsvFile)
-            
+
             (princ "\n=======================================================")
-            (princ "\n[УСПЕХ] Сквозной сбор объемов завершен без ручного выбора.")
-            (princ (strcat "\n Файл сохранен: " CsvPath))
-            (princ "\n Данные сгруппированы по ID трасс на основе XDATA.")
-            (princ "\n Длины взяты в чистом виде без повторных округлений.")
+            (princ "\n[УСПЕХ] Ведомость сохранена.")
+            (princ (strcat "\nФайл: " CsvPath))
             (princ "\n=======================================================")
         )
     )
+
     (LEP:PrintFooter)
     (princ)
 )
 
-(princ "\nМодуль LEP-REPORT v0.4 успешно интегрирован.")
+
+(princ "\nМодуль LEP-REPORT v0.5 загружен (без ActiveX, кроссплатформенно).")
 (princ)
