@@ -95,9 +95,17 @@
 ; делать не нужно.
 ;=====================================================================
  
-(defun LEP:EnsureLinetypeLoaded (LtName / )
+(defun LEP:EnsureLinetypeLoaded (LtName / OldFiledia)
     (if (and (/= LtName "CONTINUOUS") (not (tblsearch "LTYPE" LtName)))
-        (command "_.-linetype" "_Load" LtName "acad.lin" "")
+        (progn
+            ;; FILEDIA=1 (по умолчанию) открывает GUI-диалог выбора файла
+            ;; вместо текстового промпта на шаге "Select linetype file" -
+            ;; тогда "acad.lin" уходит не туда и ломает очередь command.
+            (setq OldFiledia (getvar "FILEDIA"))
+            (setvar "FILEDIA" 0)
+            (command "_.-linetype" "_Load" LtName "acad.lin" "")
+            (setvar "FILEDIA" OldFiledia)
+        )
     )
 )
  
@@ -266,7 +274,11 @@
         (strcat WireName ", L=" (rtos Length 2 1) " м")
     )
  
-    (command "_.LEADER" MidPt TextPt "" "" LabelText "")
+    ;; После двух точек LEADER просит 3 ответа: пусто (закончить линию),
+    ;; текст, пусто (закончить текст) - лишний "" тут уводил в подменю
+    ;; [Tolerance/Copy/Mtext/Block/None/Undo], а LabelText туда прилетал
+    ;; как невалидное ключевое слово.
+    (command "_.LEADER" MidPt TextPt "" LabelText "")
  
     (setvar "CLAYER" OldLayer)
 )
