@@ -256,11 +256,13 @@
 ;=====================================================================
 ; LEP:CreateSpanLabel
 ;
-; Подпись-выноска у пролёта: марка провода/кабеля + длина.
+; Подпись-выноска у пролёта: статус + марка провода/кабеля + длина.
+; Формат статуса тот же, что у опор (LEP:CreatePoleLabel) - "Проект."
+; / "Сущ." - для единообразия подписей на чертеже.
 ;=====================================================================
- 
-(defun LEP:CreateSpanLabel (SubVerts WireName SpanLen / MidPt TextPt LabelText OldLayer FirstPt LastPt)
- 
+
+(defun LEP:CreateSpanLabel (SubVerts WireName SpanLen Status / MidPt TextPt LabelText OldLayer FirstPt LastPt StatusText)
+
     (setq OldLayer (getvar "CLAYER"))
     (LEP:SetCurrentLayer *LEP-Layer-Text*)
  
@@ -281,8 +283,13 @@
         )
     )
  
+    (if (= Status "EXIST")
+        (setq StatusText "Сущ.")
+        (setq StatusText "Проект.")
+    )
+
     (setq LabelText
-        (strcat WireName ", L=" (rtos SpanLen 2 1) " м")
+        (strcat StatusText " " WireName ", L=" (rtos SpanLen 2 1) " м")
     )
  
     ;; После двух точек LEADER просит 3 ответа: пусто (закончить линию),
@@ -303,7 +310,7 @@
 ;=====================================================================
  
 (defun C:LEP-SPAN (/ Route Verts P1 P2 Idx1 Idx2 SubVerts LineType WireList WireChoice
-                     LayerName LtName LtFile SpanEnt SpanLength OldOs OldError LEP-CatchResult)
+                     LayerName LtName LtFile SpanEnt SpanLength Status OldOs OldError LEP-CatchResult)
  
     (setq OldError *error*)
     (defun *error* (msg)
@@ -396,14 +403,18 @@
 
                                                     (if WireChoice
                                                         (progn
+                                                            (setq Status (LEP:GetStatus "пролёта"))
+                                                            (princ (strcat "\n[DEBUG 8b] Status = " Status))
+
                                                             (setq SpanEnt (LEP:CreateSpanEntity SubVerts LayerName LtName))
                                                             (setq SpanLength (LEP:GetSpanLength SubVerts))
                                                             (princ (strcat "\n[DEBUG 9] SpanEnt=" (vl-princ-to-string SpanEnt) " Length=" (rtos SpanLength 2 3)))
 
-                                                            ;; Данные для ведомости: марка, сечение, точная длина
+                                                            ;; Данные для ведомости: статус, марка, сечение, точная длина
                                                             (LEP:SetData SpanEnt
                                                                 (list
                                                                     (cons "TYPE" "SPAN")
+                                                                    (cons "STATUS" Status)
                                                                     (cons "WIRE" (car WireChoice))
                                                                     (cons "SECTION" (cdr WireChoice))
                                                                     (cons "LENGTH" (rtos SpanLength 2 3))
@@ -411,7 +422,7 @@
                                                             )
                                                             (princ "\n[DEBUG 10] После SetData, перед CreateSpanLabel")
 
-                                                            (LEP:CreateSpanLabel SubVerts (car WireChoice) SpanLength)
+                                                            (LEP:CreateSpanLabel SubVerts (car WireChoice) SpanLength Status)
                                                             (princ "\n[DEBUG 11] После CreateSpanLabel - пролёт готов")
                                                         )
                                                     )

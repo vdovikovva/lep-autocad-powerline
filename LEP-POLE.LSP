@@ -343,20 +343,12 @@
 ; LEP:GetPoleStatus
 ;
 ; Запрашивает статус опоры: Проект или Существующая.
-; Возвращает "PROJECT" или "EXIST".
+; Возвращает "PROJECT" или "EXIST". Сама логика теперь общая -
+; см. LEP:GetStatus в LEP-UTILS.LSP (используется и в LEP-SPAN).
 ;=====================================================================
- 
-(defun LEP:GetPoleStatus (/ Choice)
- 
-    (initget "Проект Сущ")
-    (setq Choice
-        (getkword "\nСтатус опоры [Проект/Сущ] <Проект>: ")
-    )
- 
-    (if (or (not Choice) (= Choice "Проект"))
-        "PROJECT"
-        "EXIST"
-    )
+
+(defun LEP:GetPoleStatus ()
+    (LEP:GetStatus "опоры")
 )
  
  
