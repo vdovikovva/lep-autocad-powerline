@@ -1,9 +1,17 @@
 ;=====================================================================
 ; ПРОЕКТ:       LEP (Автоматизация проектирования ЛЭП)
 ; ФАЙЛ:         LEP-REPORT.LSP
-; ВЕРСИЯ:       1.1  (сортировка трасс по порядку - Claude)
+; ВЕРСИЯ:       1.2  (подсчёт МТП/РЛК/ЩУ/ПУ - Claude, 2026-07-10)
 ;
 ; ПРАВКИ В ЭТОЙ ВЕРСИИ:
+;
+; -1. МТП/РЛК/ЩУ/ПУ (LEP-END.LSP) теперь тоже считаются - ключ EQUIP
+;    в XDATA опоры (LEP:AddEquipData) добавляет отдельную строку в
+;    ведомость сверх обычного подсчёта опоры по типу. Заодно
+;    LEP:WriteMasterListBlock перестал слепо клеить "Опора " ко всем
+;    строкам с Unit="шт." - теперь только к тем, что реально есть в
+;    *LEP-PoleTypes* (иначе "РЛК" превращалось бы в "Опора РЛК").
+;
 ;
 ; 0. ПОРЯДОК ТРАСС: раньше в CSV трассы шли не в том порядке, в каком
 ;    создавались (ssget "_X" отдаёт объекты, похоже, в порядке
@@ -151,9 +159,16 @@
 ; трассы, БЕЗ повтора названия трассы в каждой строке (раньше было
 ; так, неудобно читать).
 ;
-; Для опор (Unit = "шт.") название дополняется префиксом "Опора " -
-; для провода/кабеля название и так самодостаточное (например
-; "СИП-2 95 мм2"), доп. префикс не нужен.
+; Для опор (Unit = "шт." И название есть в *LEP-PoleTypes* - см. ниже)
+; название дополняется префиксом "Опора " - для провода/кабеля и для
+; оконечного оборудования (РЛК/МТП/ЩУ/ПУ, тоже штучное, но не "опора"
+; сама по себе, а то, что на ней висит - LEP-END.LSP) префикс не нужен,
+; название и так самодостаточное.
+;
+; Проверка ИМЕННО по *LEP-PoleTypes* (а не просто "Unit = шт."), т.к.
+; после появления LEP-END оборудование тоже считается штуками - если
+; судить только по Unit, "Опора " приклеилась бы и к строке "РЛК", что
+; бессмысленно (РЛК - не опора, а разъединитель НА опоре).
 ;=====================================================================
 
 (defun LEP:WriteMasterListBlock (File Title ItemList / Item Name Value Unit ValueStr Prefix)
@@ -167,7 +182,10 @@
 
         (if (= Unit "шт.")
             (progn
-                (setq Prefix "Опора ")
+                (if (assoc Name *LEP-PoleTypes*)
+                    (setq Prefix "Опора ")
+                    (setq Prefix "")
+                )
                 (setq ValueStr (itoa (fix Value)))
             )
             (progn
@@ -186,7 +204,7 @@
 ;=====================================================================
 
 (defun C:LEP-REPORT ( / VL-SS PoleSS i Ent RouteID Status WireName WireLength
-                        PoleName MasterList MergedList CsvPath CsvFile FileCheck
+                        PoleName EquipCode EquipName MasterList MergedList CsvPath CsvFile FileCheck
                         RouteItem ModulesFolder)
 
     (LEP:PrintHeader "Выгрузка ведомости в CSV (только Проект.)")
@@ -238,6 +256,13 @@
 
     ;=================================================================
     ; ЭТАП 2: ПРОЕКТИРУЕМЫЕ ОПОРЫ - количество по типам
+    ;
+    ; Заодно считаем оконечное оборудование (РЛК/МТП/ЩУ/ПУ, LEP-END.LSP)
+    ; - оно физически "висит" на обычной опоре (ключ EQUIP в XDATA, см.
+    ; LEP:AddEquipData), поэтому сама опора и так уже посчитана выше по
+    ; MODEL как обычно, а EQUIP добавляет ОТДЕЛЬНУЮ строку в ведомость
+    ; для самого оборудования (иначе РЛК/МТП/ЩУ/ПУ вообще не попали бы
+    ; в CSV - опора без EQUIP ничем не отличается от обычной опоры).
     ;=================================================================
 
     (setq PoleSS (ssget "_X" (list '(0 . "INSERT") (cons 8 *LEP-Layer-Proj-Pole*))))
@@ -258,6 +283,22 @@
                         (if (not PoleName) (setq PoleName "ТИП_НЕ_УКАЗАН"))
 
                         (setq MasterList (LEP:AddToMasterList MasterList RouteID PoleName 1 "шт."))
+
+                        (setq EquipCode (LEP:GetDataValue Ent "EQUIP"))
+                        (if EquipCode
+                            (progn
+                                (setq EquipName
+                                    (cond
+                                        ((= EquipCode "RLK") *LEP-Label-RLK*)
+                                        ((= EquipCode "MTP") *LEP-Label-MTP*)
+                                        ((= EquipCode "SCHU") *LEP-Label-SchU*)
+                                        ((= EquipCode "PU") *LEP-Label-PU*)
+                                        (t EquipCode)
+                                    )
+                                )
+                                (setq MasterList (LEP:AddToMasterList MasterList RouteID EquipName 1 "шт."))
+                            )
+                        )
                     )
                 )
                 (setq i (1+ i))
@@ -350,5 +391,5 @@
 )
 
 
-(princ "\nМодуль LEP-REPORT v1.1 загружен (сортировка трасс, структура по трассам-шапкам, UTF-8+BOM, проверка папки).")
+(princ "\nМодуль LEP-REPORT v1.2 загружен (+ подсчёт МТП/РЛК/ЩУ/ПУ из LEP-END).")
 (princ)

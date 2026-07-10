@@ -3,7 +3,7 @@
 ;
 ;   ПРОЕКТ:      LEP
 ;   ФАЙЛ:        LEP-DATA.LSP
-;   ВЕРСИЯ:      0.3  (испр. Claude)
+;   ВЕРСИЯ:      0.4  (VCLASS маршрута, LEP:AddEquipData - Claude, 2026-07-10)
 ;
 ;   ИСПРАВЛЕНО В ЭТОЙ ВЕРСИИ:
 ;   LEP:SetData записывала данные НЕПРАВИЛЬНЫМ форматом XDATA — пары
@@ -232,24 +232,30 @@
 ;
 ; LEP:AddRoute
 ;
-; Записывает данные нового маршрута. Без изменений в логике -
-; просто теперь корректно пишется благодаря исправленной SetData.
+; Записывает данные нового маршрута. VClass - код класса напряжения
+; ("10" или "04", см. *LEP-VoltageClasses* в LEP-CONFIG.LSP) -
+; спрашивается один раз при построении маршрута (LEP-ROUTE.LSP) и
+; хранится здесь же, в XDATA маршрута (ключ VCLASS) - дальше LEP-SPAN
+; и LEP-POLE читают его через (LEP:GetDataValue RouteEnt "VCLASS"),
+; чтобы предложить нужный список марок провода и вторую строку
+; подписи опоры, не спрашивая класс заново на каждом пролёте/опоре.
 ;
 ;=====================================================================
- 
-(defun LEP:AddRoute (Ent / ID)
- 
+
+(defun LEP:AddRoute (Ent VClass / ID)
+
     (setq ID (LEP:CreateRouteID))
- 
+
     (LEP:SetData
         Ent
         (list
             (cons "TYPE" "ROUTE")
             (cons "ID" ID)
             (cons "STATUS" "PROJECT")
+            (cons "VCLASS" VClass)
         )
     )
- 
+
     ID
 )
  
@@ -264,7 +270,7 @@
 ;=====================================================================
  
 (defun LEP:AddPoleData (Ent RouteID PoleType)
- 
+
     (LEP:SetData
         Ent
         (list
@@ -274,9 +280,39 @@
             (cons "STATUS" "PROJECT")
         )
     )
- 
+
 )
- 
- 
-(princ "\nLEP-DATA v0.3 загружен (исправлен формат XDATA, добавлена GetDataValue).")
+
+
+;=====================================================================
+;
+; LEP:AddEquipData
+;
+; То же самое, что LEP:AddPoleData (статус всегда "Проект.", см.
+; LEP-END.LSP - для МТП/ПУ это зафиксировано по прямому указанию
+; пользователя), плюс ДОПОЛНИТЕЛЬНЫЙ ключ EQUIP - что именно на этой
+; опоре подписано ("RLK"/"MTP"/"SCHU"/"PU"). Сама опора и так попадает
+; в обычный подсчёт по MODEL (LEP-REPORT, без изменений) - EQUIP нужен
+; отдельно, чтобы посчитать в ведомости само оборудование (РЛК/МТП/
+; ЩУ/ПУ), а не только опоры, на которых оно висит.
+;
+;=====================================================================
+
+(defun LEP:AddEquipData (Ent RouteID PoleType EquipCode)
+
+    (LEP:SetData
+        Ent
+        (list
+            (cons "TYPE" "POLE")
+            (cons "ROUTE" RouteID)
+            (cons "MODEL" PoleType)
+            (cons "STATUS" "PROJECT")
+            (cons "EQUIP" EquipCode)
+        )
+    )
+
+)
+
+
+(princ "\nLEP-DATA v0.4 загружен (класс напряжения маршрута, LEP:AddEquipData).")
 (princ)

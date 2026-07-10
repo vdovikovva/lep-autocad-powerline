@@ -2,9 +2,17 @@
 ;
 ;   ПРОЕКТ:      LEP
 ;   ФАЙЛ:        LEP-SPAN.LSP
-;   ВЕРСИЯ:      0.3  (запас длины + размерная линия - Claude)
+;   ВЕРСИЯ:      0.4  (марка провода по классу напряжения - Claude, 2026-07-10)
 ;
 ;   ДОБАВЛЕНО В ЭТОЙ ВЕРСИИ:
+;   Список марок ВЛ-провода теперь зависит от класса напряжения
+;   МАРШРУТА (VCLASS в XDATA, см. LEP-ROUTE.LSP) - СИП-3
+;   (*LEP-WireTypes-VL-10*) для 10кВ, СИП-2 (*LEP-WireTypes-VL-04*)
+;   для 0,4кВ. Раньше был один общий список *LEP-WireTypes-VL* на все
+;   случаи - физически СИП-2 и СИП-3 для разных классов напряжения не
+;   взаимозаменяемы, старый список мог предложить не тот провод.
+;
+;   РАНЕЕ ДОБАВЛЕНО:
 ;   Расстояние между опорами (по прямой) и реальная длина провода/
 ;   кабеля, которую нужно закупить - теперь РАЗНЫЕ величины:
 ;     - LEP:GetRealLength - ВЛ получает запас на провис в процентах
@@ -396,7 +404,7 @@
 ; точки (на первом клике пары) - выход из цикла.
 ;=====================================================================
  
-(defun C:LEP-SPAN (/ Route RouteID Verts P1 P2 Idx1 Idx2 SubVerts LineType WireList WireChoice
+(defun C:LEP-SPAN (/ Route RouteID VClass Verts P1 P2 Idx1 Idx2 SubVerts LineType WireList WireChoice
                      LayerName LtName LtFile SpanEnt SpanLength RealLength DimDistance
                      Status OldOs OldError LEP-CatchResult)
 
@@ -423,6 +431,13 @@
             ;; LEP-POLE.LSP, чтобы strcat в LEP:SetData не упал на nil.
             (setq RouteID (LEP:GetDataValue Route "ID"))
             (if (not RouteID) (setq RouteID "LEP_ROUTE_UNKNOWN"))
+
+            ;; Класс напряжения маршрута - выбран один раз при LEP-ROUTE,
+            ;; определяет, какой список марок ВЛ-провода предложить ниже
+            ;; (СИП-3 для 10кВ, СИП-2 для 0,4кВ - разные провода физически,
+            ;; путать нельзя, см. *LEP-WireTypes-VL-10*/-VL-04* в CONFIG).
+            (setq VClass (LEP:GetDataValue Route "VCLASS"))
+
             (setq Verts (LEP:GetVertices Route))
  
             (setq OldOs (getvar "OSMODE"))
@@ -472,7 +487,14 @@
                                                 (progn
                                                     (if (= (cdr LineType) "VL")
                                                         (progn
-                                                            (setq WireList *LEP-WireTypes-VL*)
+                                                            ;; СИП-3 - только для 10кВ (магистраль), СИП-2 -
+                                                            ;; только для 0,4кВ (низкое напряжение) - список
+                                                            ;; марок выбирается по классу МАРШРУТА, а не
+                                                            ;; предлагается общий на оба случая.
+                                                            (if (= VClass "10")
+                                                                (setq WireList *LEP-WireTypes-VL-10*)
+                                                                (setq WireList *LEP-WireTypes-VL-04*)
+                                                            )
                                                             (setq LayerName *LEP-Layer-Proj-VL*)
                                                             (setq LtName "CONTINUOUS")
                                                             (setq LtFile "")
@@ -558,5 +580,5 @@
 )
  
  
-(princ "\nLEP-SPAN v0.3 загружен (запас длины ВЛ/КЛ, размерная линия между опорами).")
+(princ "\nLEP-SPAN v0.4 загружен (марка провода по классу напряжения маршрута).")
 (princ)

@@ -2,9 +2,42 @@
 ;
 ;   ПРОЕКТ:      LEP
 ;   ФАЙЛ:        LEP-POLE.LSP
-;   ВЕРСИЯ:      0.5  (добавлена LEP-POLE-ALONE - Claude)
+;   ВЕРСИЯ:      0.8  (направление подписи параметром - Claude, 2026-07-10)
 ;
 ;   ДОБАВЛЕНО В ЭТОЙ ВЕРСИИ:
+;   LEP:CreatePoleLabel получила параметр OffsetAngle (направление
+;   смещения подписи, радианы) - раньше направление было зашито прямо
+;   в формулу (всегда 45°, вверх-вправо). Понадобилось для LEP-END:
+;   три опоры блока МТП стоят близко друг к другу, и при одинаковом
+;   направлении их подписи накладывались друг на друга (замечено
+;   пользователем на реальном тесте). Обычные опоры (LEP-POLE/
+;   LEP-POLE-ALONE) передают *LEP-Label-Angle-Default* (те же 45°,
+;   визуально ничего не изменилось).
+;
+;   ИСПРАВЛЕНО РАНЕЕ (баг на угловой опоре):
+;   Баг: GEOMCONSTRAINT ловил конфликт "over-constrain" при установке
+;   угловой опоры (клик рядом с уже существующим изломом маршрута
+;   создавал вторую, почти совпадающую вершину полилинии). Исправлено
+;   в LEP:InsertVertexOnRoute (снап к существующей вершине по
+;   *LEP-Vertex-Snap-Tolerance*) + защитный пустой (command) после
+;   GEOMCONSTRAINT в C:LEP-POLE (закрывает команду, если она всё же
+;   зависнет по другой причине - иначе портился весь дальнейший цикл).
+;
+;   РАНЕЕ ДОБАВЛЕНО (символ-трапеция вместо test-block):
+;   Вставка опоры переведена с test-block (кружок+атрибут) на новый
+;   символ - трапеция+крест (LEP-POLESYM.LSP, *LEP-Block-Pole* теперь
+;   указывает на него). Разворот символа считается по направлению
+;   маршрута (широкая сторона к началу трассы, узкая к концу), толщина
+;   линии зависит от статуса (Проект. жирнее Сущ.), а по типу опоры
+;   (*LEP-PoleColumns* в CONFIG) автоматически рисуется 1/2/3 трапеции
+;   (главная опора + откос(ы)). Подпись опоры теперь ДВУХСТРОЧНАЯ -
+;   вторая строка это класс линии маршрута ("ВЛЗ-10 кВ"/"ВЛИ-0,4 кВ",
+;   раньше эти данные на момент установки опоры были ещё неизвестны -
+;   теперь класс маршрута выбирается один раз при LEP-ROUTE, доступен
+;   сразу). LEP:SetBlockAttribute/ATTREQ убраны - новый символ без
+;   атрибутов.
+;
+;   РАНЕЕ ДОБАВЛЕНО:
 ;   Новая команда C:LEP-POLE-ALONE - опора БЕЗ привязки к трассе
 ;   (вставляется ровно в клик, без проекции/вершины/GEOMCONSTRAINT,
 ;   свободно двигается потом). Для ведомости всё равно привязывается
@@ -139,70 +172,114 @@
 ; так надёжнее и одинаково работает на Mac и Windows. Рассчитано на
 ; ПРЯМЫЕ отрезки (без дуг/bulge) - для трассы ЛЭП это нормально.
 ;
+; ⚠️ ИСПРАВЛЕНО 2026-07-10 (баг найден на угловой опоре): если клик
+; пришёлся РЯДОМ С УЖЕ СУЩЕСТВУЮЩЕЙ вершиной маршрута (а угловые опоры
+; почти всегда ставятся именно в реальный излом трассы, где вершина
+; уже есть) - раньше сюда всё равно вставлялась ВТОРАЯ, почти
+; совпадающая вершина. На этом участке полилинии получался вырожденный
+; (нулевой длины) отрезок, и когда GEOMCONSTRAINT пытался ещё и
+; "приклеить" туда опору - решатель ограничений ловил конфликт
+; "over-constrain" (диалог "Geometric Constraints" в AutoCAD). Теперь,
+; если спроецированная точка ближе *LEP-Vertex-Snap-Tolerance* м к
+; уже существующей вершине отрезка - НОВАЯ вершина не вставляется
+; вообще, используется существующая как есть (см. cond ниже).
+;
 ; Вход:
 ;   RouteEnt   - ename полилинии маршрута
 ;   ClickPoint - точка, которую кликнул пользователь
 ;
-; Выход: точная точка новой вершины (x y) - именно туда нужно ставить
-; блок опоры.
+; Выход: список (Точка SegStart SegEnd) - точка, куда ставить опору
+; (либо новая вершина, либо уже существующая, если попали в снап), и
+; концы отрезка маршрута под ней (для разворота символа опоры).
 ;=====================================================================
- 
-(defun LEP:InsertVertexOnRoute (RouteEnt ClickPoint / Verts Found Idx NewPt NewVerts i V NewEList Item VertexInserted)
- 
+
+(defun LEP:InsertVertexOnRoute (RouteEnt ClickPoint / Verts Found Idx NewPt SegStart SegEnd NewVerts i V NewEList Item VertexInserted)
+
     (setq Verts (LEP:GetVertices RouteEnt))
     (setq Found (LEP:FindNearestSegment Verts ClickPoint))
     (setq Idx (car Found))
     (setq NewPt (cadr Found))
- 
-    ;; Собираем новый список вершин со вставленной точкой сразу после Idx
-    (setq NewVerts nil)
-    (setq i 0)
-    (foreach V Verts
-        (setq NewVerts (append NewVerts (list V)))
-        (if (= i Idx)
-            (setq NewVerts (append NewVerts (list NewPt)))
+
+    ;; Запоминаем концы ОТРЕЗКА, на который легла новая вершина - ДО
+    ;; того, как список вершин поменяется вставкой. Нужно для разворота
+    ;; символа опоры по направлению маршрута (LEP:GetPoleRotation,
+    ;; LEP-POLESYM.LSP) - широкая сторона трапеции должна смотреть к
+    ;; началу маршрута, узкая - к концу (по просьбе пользователя).
+    (setq SegStart (nth Idx Verts))
+    (setq SegEnd (nth (1+ Idx) Verts))
+
+    (cond
+
+        ;; Точка совпадает (почти) с началом отрезка - уже существующая
+        ;; вершина маршрута (реальный излом трассы). НЕ создаём вторую
+        ;; точку в том же месте - см. ⚠️ в шапке функции выше.
+        ((< (distance NewPt SegStart) *LEP-Vertex-Snap-Tolerance*)
+            (list SegStart SegStart SegEnd)
         )
-        (setq i (1+ i))
-    )
- 
-    ;; Перестраиваем DXF-данные полилинии:
-    ;; - на месте ПЕРВОГО встреченного (10 . ...) вставляем ВЕСЬ новый
-    ;;   список вершин по порядку;
-    ;; - остальные старые (10 . ...) пропускаем (они уже учтены выше);
-    ;; - код 90 (счётчик вершин) обновляем на новое количество.
-    (setq NewEList nil)
-    (setq VertexInserted nil)
- 
-    (foreach Item (entget RouteEnt)
-        (cond
- 
-            ((= (car Item) 10)
-             (if (not VertexInserted)
-                 (progn
-                     (foreach NV NewVerts
-                         (setq NewEList (append NewEList (list (cons 10 NV))))
+
+        ;; Точка совпадает (почти) с концом отрезка - аналогично.
+        ((< (distance NewPt SegEnd) *LEP-Vertex-Snap-Tolerance*)
+            (list SegEnd SegStart SegEnd)
+        )
+
+        ;; Обычный случай - точка на прямом участке, вставляем новую
+        ;; вершину как раньше.
+        (t
+
+            ;; Собираем новый список вершин со вставленной точкой сразу после Idx
+            (setq NewVerts nil)
+            (setq i 0)
+            (foreach V Verts
+                (setq NewVerts (append NewVerts (list V)))
+                (if (= i Idx)
+                    (setq NewVerts (append NewVerts (list NewPt)))
+                )
+                (setq i (1+ i))
+            )
+
+            ;; Перестраиваем DXF-данные полилинии:
+            ;; - на месте ПЕРВОГО встреченного (10 . ...) вставляем ВЕСЬ новый
+            ;;   список вершин по порядку;
+            ;; - остальные старые (10 . ...) пропускаем (они уже учтены выше);
+            ;; - код 90 (счётчик вершин) обновляем на новое количество.
+            (setq NewEList nil)
+            (setq VertexInserted nil)
+
+            (foreach Item (entget RouteEnt)
+                (cond
+
+                    ((= (car Item) 10)
+                     (if (not VertexInserted)
+                         (progn
+                             (foreach NV NewVerts
+                                 (setq NewEList (append NewEList (list (cons 10 NV))))
+                             )
+                             (setq VertexInserted T)
+                         )
                      )
-                     (setq VertexInserted T)
-                 )
-             )
-             ;; остальные (10 . ...) просто пропускаем, ничего не добавляем
+                     ;; остальные (10 . ...) просто пропускаем, ничего не добавляем
+                    )
+
+                    ((= (car Item) 90)
+                     (setq NewEList (append NewEList (list (cons 90 (length NewVerts)))))
+                    )
+
+                    (t
+                     (setq NewEList (append NewEList (list Item)))
+                    )
+
+                )
             )
- 
-            ((= (car Item) 90)
-             (setq NewEList (append NewEList (list (cons 90 (length NewVerts)))))
-            )
- 
-            (t
-             (setq NewEList (append NewEList (list Item)))
-            )
- 
+
+            (entmod NewEList)
+            (entupd RouteEnt)
+
+            ;; Возвращаем НЕ только точку, а точку + концы отрезка маршрута,
+            ;; на который она легла - вызывающая сторона (C:LEP-POLE) считает
+            ;; по ним угол разворота символа опоры.
+            (list NewPt SegStart SegEnd)
         )
     )
- 
-    (entmod NewEList)
-    (entupd RouteEnt)
- 
-    NewPt
 )
  
  
@@ -338,85 +415,35 @@
  
  
 ;=====================================================================
-; LEP:SetBlockAttribute
-;
-; Записывает значение в атрибут уже вставленного блока.
-; Работает БЕЗ ActiveX (только entnext/entget/entmod).
-;=====================================================================
- 
-(defun LEP:SetBlockAttribute (BlockEnt Tag NewValue / SubEnt SubData Found)
- 
-    (setq Found nil)
-    (setq SubEnt (entnext BlockEnt))
- 
-    (while (and SubEnt (not Found))
- 
-        (setq SubData (entget SubEnt))
- 
-        (cond
- 
-            ((= (cdr (assoc 0 SubData)) "SEQEND")
-                (setq SubEnt nil)
-            )
- 
-            ((and (= (cdr (assoc 0 SubData)) "ATTRIB")
-                  (= (cdr (assoc 2 SubData)) Tag))
-                (entmod (subst (cons 1 NewValue) (assoc 1 SubData) SubData))
-                (entupd SubEnt)
-                (setq Found T)
-            )
- 
-            (t
-                (setq SubEnt (entnext SubEnt))
-            )
- 
-        )
- 
-    )
- 
-    Found
-)
- 
- 
-;=====================================================================
 ; LEP:InsertPole
 ;
-; Вставка блока опоры (всегда один и тот же блок *LEP-Block-Pole*)
-; в указанную точку, с записью типа в атрибут и переключением слоя
-; по статусу.
+; Вставка символа опоры (трапеция + крест, LEP-POLESYM.LSP) в точку
+; Point с разворотом Rotation (радианы) - переключает слой по статусу
+; и делегирует саму вставку LEP:InsertPoleGroup, которая по типу опоры
+; сама решает, сколько трапеций рисовать (1/2/3, см. *LEP-PoleColumns*
+; в CONFIG). Толщина линии по статусу (Проект./Сущ.) выставляется
+; внутри LEP:InsertPoleSymbol - здесь этим заниматься не нужно.
+;
+; РАНЬШЕ здесь была запись типа опоры в АТРИБУТ блока (test-block,
+; тег TIP) - новый символ опоры БЕЗ атрибутов (подписи - отдельным
+; текстом, LEP:CreatePoleLabel, как и раньше), поэтому ATTREQ/
+; LEP:SetBlockAttribute больше не нужны и убраны отсюда целиком.
 ;=====================================================================
- 
-(defun LEP:InsertPole (Point PoleType Status / OldLayer OldAttreq Ent TargetLayer)
- 
+
+(defun LEP:InsertPole (Point Rotation PoleType Status / OldLayer Ent TargetLayer)
+
     (setq OldLayer (getvar "CLAYER"))
- 
+
     (if (= Status "EXIST")
         (setq TargetLayer *LEP-Layer-Exist-Pole*)
         (setq TargetLayer *LEP-Layer-Proj-Pole*)
     )
     (LEP:SetCurrentLayer TargetLayer)
- 
-    (setq OldAttreq (getvar "ATTREQ"))
-    (setvar "ATTREQ" 0)
- 
-    (command "_.-INSERT" *LEP-Block-Pole* Point 1 1 0)
- 
-    (setvar "ATTREQ" OldAttreq)
- 
-    (setq Ent (entlast))
- 
-    (if (not (LEP:SetBlockAttribute Ent *LEP-Block-Pole-AttTag* PoleType))
-        (princ
-            (strcat
-                "\n[LEP-POLE] ВНИМАНИЕ: не найден атрибут с тегом \""
-                *LEP-Block-Pole-AttTag*
-                "\" в блоке \"" *LEP-Block-Pole* "\"."
-            )
-        )
-    )
- 
+
+    (setq Ent (LEP:InsertPoleGroup Point Rotation PoleType Status))
+
     (setvar "CLAYER" OldLayer)
- 
+
     Ent
 )
  
@@ -426,39 +453,60 @@
 ;
 ; Подпись-выноска (LEADER) рядом с опорой.
 ;
-; ВАЖНО (см. шапку файла): сейчас в подписи только статус и тип
-; опоры. Класс линии/напряжение сюда пока не добавлены - это
-; открытый вопрос, см. LEP-README.md.
+; ТЕПЕРЬ ДВЕ СТРОКИ (было однострочно, см. историю версий файла):
+; первая - статус+тип ("Проект. оп. А20-3Н"), вторая - класс линии
+; ("ВЛЗ-10 кВ"/"ВЛИ-0,4 кВ", ClassLabel) - берётся из класса
+; напряжения МАРШРУТА (*LEP-VoltageClassLabel* в CONFIG), который
+; теперь известен СРАЗУ при установке опоры (выбирается один раз при
+; LEP-ROUTE, а не после LEP-SPAN, как раньше не хватало данных).
+;
+; ClassLabel может быть nil (например LEP-POLE-ALONE, если на
+; чертеже вообще нет ни одной трассы, привязать не к чему) - тогда
+; вторая строка просто не добавляется, подпись остаётся однострочной.
+;
+; Многострочный текст у LEADER - ПОСЛЕДОВАТЕЛЬНО НЕСКОЛЬКО ответов на
+; повторяющийся промпт "Enter next line of text or <RETURN>" (так
+; документировано у самой команды AutoCAD), последний - пустая строка,
+; чтобы закончить ввод текста. Для одной строки - было 3 ответа после
+; точек (пусто/текст/пусто), для двух строк - 4 (пусто/строка1/
+; строка2/пусто).
+;
+; OffsetAngle (радианы) - НАПРАВЛЕНИЕ, куда уходит подпись от опоры.
+; Добавлено 2026-07-10: у обычных опор всегда 45° (вверх-вправо,
+; *LEP-Label-Angle-Default* в CONFIG - то же самое смещение, что было
+; раньше, когда направление было зашито прямо в формулу). Понадобилось,
+; чтобы у блока МТП (LEP-END.LSP, 3 опоры близко друг к другу) можно
+; было развести три подписи в РАЗНЫЕ стороны - иначе накладываются
+; друг на друга (замечено пользователем на реальном тесте).
 ;=====================================================================
- 
-(defun LEP:CreatePoleLabel (Point PoleType Status / StatusText LabelText TextPoint OldLayer)
- 
+
+(defun LEP:CreatePoleLabel (Point PoleType Status ClassLabel OffsetAngle / StatusText LabelText TextPoint OldLayer)
+
     (setq OldLayer (getvar "CLAYER"))
     (LEP:SetCurrentLayer *LEP-Layer-Text*)
- 
+
     (if (= Status "EXIST")
         (setq StatusText "Сущ.")
         (setq StatusText "Проект.")
     )
- 
+
     (setq LabelText (strcat StatusText " оп. " PoleType))
- 
-    ;; Точка для текста - со смещением от опоры, чтобы не накладывалась
-    ;; на сам блок. *LEP-LeaderOffset* - настройка в LEP-CONFIG.LSP.
+
+    ;; Точка для текста - со смещением от опоры на *LEP-LeaderOffset*
+    ;; м, в направлении OffsetAngle, чтобы не накладывалась на сам блок
+    ;; (и на соседние подписи, если направление задано специально).
     (setq TextPoint
         (list
-            (+ (car Point) *LEP-LeaderOffset*)
-            (+ (cadr Point) *LEP-LeaderOffset*)
+            (+ (car Point) (* *LEP-LeaderOffset* (cos OffsetAngle)))
+            (+ (cadr Point) (* *LEP-LeaderOffset* (sin OffsetAngle)))
         )
     )
 
-    ;; После двух точек LEADER просит 3 ответа: пусто (закончить линию),
-    ;; текст, пусто (закончить текст) - НЕ 4 (та же ошибка, что чинили
-    ;; в LEP-SPAN.LSP/LEP-ROUTE.LSP - лишний "" уводил в подменю
-    ;; [Tolerance/Copy/Mtext/...], а текст подписи прилетал туда
-    ;; невалидным ключевым словом, роняя команду с "syntax error").
-    (command "_.LEADER" Point TextPoint "" LabelText "")
- 
+    (if ClassLabel
+        (command "_.LEADER" Point TextPoint "" LabelText ClassLabel "")
+        (command "_.LEADER" Point TextPoint "" LabelText "")
+    )
+
     (setvar "CLAYER" OldLayer)
 )
  
@@ -472,7 +520,7 @@
 ; Enter без точки - выход из цикла.
 ;=====================================================================
  
-(defun C:LEP-POLE (/ Route RouteID OldOs OldError ClickPoint NewVertex PoleType Status PoleEnt)
+(defun C:LEP-POLE (/ Route RouteID VClass ClassLabel OldOs OldError ClickPoint InsertResult NewVertex Rotation PoleType Status PoleEnt)
  
     (setq OldError *error*)
     (defun *error* (msg)
@@ -491,7 +539,13 @@
  
             (setq RouteID (LEP:GetDataValue Route "ID"))
             (if (not RouteID) (setq RouteID "LEP_ROUTE_UNKNOWN"))
- 
+
+            ;; Класс линии для второй строки подписи опоры - берём ОДИН
+            ;; РАЗ здесь (класс напряжения не меняется вдоль одного
+            ;; маршрута, см. LEP-ROUTE.LSP), а не на каждой опоре.
+            (setq VClass (LEP:GetDataValue Route "VCLASS"))
+            (setq ClassLabel (cdr (assoc VClass *LEP-VoltageClassLabel*)))
+
             (setq OldOs (getvar "OSMODE"))
             (setvar "OSMODE" 0)
  
@@ -514,26 +568,51 @@
  
                             ;; 1. Находим ближайшую точку на линии и
                             ;;    вставляем туда новую вершину полилинии.
-                            (setq NewVertex (LEP:InsertVertexOnRoute Route ClickPoint))
- 
+                            ;;    Заодно получаем концы отрезка маршрута
+                            ;;    под ней - нужны для разворота символа
+                            ;;    опоры по направлению трассы.
+                            (setq InsertResult (LEP:InsertVertexOnRoute Route ClickPoint))
+                            (setq NewVertex (car InsertResult))
+                            (setq Rotation (LEP:GetPoleRotation (cadr InsertResult) (caddr InsertResult)))
+
                             ;; 2. Спрашиваем тип и статус опоры.
                             (setq PoleType (LEP:GetPoleType))
- 
+
                             (if PoleType
                                 (progn
                                     (setq Status (LEP:GetPoleStatus))
- 
-                                    ;; 3. Вставляем блок опоры в новую вершину.
-                                    (setq PoleEnt (LEP:InsertPole NewVertex PoleType Status))
- 
+
+                                    ;; 3. Вставляем символ опоры (1/2/3
+                                    ;;    трапеции по типу) в новую вершину.
+                                    (setq PoleEnt (LEP:InsertPole NewVertex Rotation PoleType Status))
+
                                     (if PoleEnt
                                         (progn
-                                            ;; 4. Привязываем опору к вершине маршрута.
+                                            ;; 4. Привязываем ГЛАВНУЮ трапецию
+                                            ;;    к вершине маршрута (откосы,
+                                            ;;    если есть, не привязаны -
+                                            ;;    чисто визуальная деталь).
                                             (command "_.GEOMCONSTRAINT" "_COincident" PoleEnt NewVertex Route NewVertex "")
- 
-                                            ;; 5. Подпись-выноска.
-                                            (LEP:CreatePoleLabel NewVertex PoleType Status)
- 
+
+                                            ;; ⚠️ Страховка (2026-07-10): если
+                                            ;; GEOMCONSTRAINT всё же не смог
+                                            ;; наложить связь (диалог "Geometric
+                                            ;; Constraints" в AutoCAD) - команда
+                                            ;; сама по себе НЕ завершается, а
+                                            ;; остаётся ждать повторного выбора
+                                            ;; объекта ("Press OK to reselect...").
+                                            ;; Пустой (command) - это Escape в
+                                            ;; AutoLISP, гарантированно закрывает
+                                            ;; любую всё ещё активную команду,
+                                            ;; чтобы один неудачный констрейнт не
+                                            ;; портил весь остальной цикл (см.
+                                            ;; переписку с пользователем про
+                                            ;; "Select object: _.GEOMCONSTRAINT").
+                                            (command)
+
+                                            ;; 5. Подпись-выноска (2 строки).
+                                            (LEP:CreatePoleLabel NewVertex PoleType Status ClassLabel *LEP-Label-Angle-Default*)
+
                                             ;; 6. Данные для ведомости.
                                             (LEP:AddPoleData PoleEnt RouteID PoleType)
                                         )
@@ -589,11 +668,16 @@
 ; возвращается в исходное состояние сразу после - той же логикой
 ; "по знаку цвета в таблице слоёв", что и в C:LEP-ROUTEVIS.
 ;
-; Возвращает: ID трассы (строка) или nil, если на чертеже нет ни
-; одной трассы вообще.
+; Возвращает: список (ID VClass) - ID трассы и её класс напряжения
+; (строки), либо (nil nil), если на чертеже нет ни одной трассы
+; вообще. VClass нужен вызывающей стороне (C:LEP-POLE-ALONE) для
+; второй строки подписи опоры - у отдельной опоры нет своего явного
+; маршрута, поэтому берём класс у той трассы, к которой её же и
+; привязали по этой самой функции, чтобы подпись не противоречила
+; тому, к чему в итоге ушли данные в ведомость.
 ;=====================================================================
 
-(defun LEP:FindNearestRoute (P / LayerData WasOff SS i Ent Verts Nearest Dist BestID BestDist)
+(defun LEP:FindNearestRoute (P / LayerData WasOff SS i Ent Verts Nearest Dist BestID BestVClass BestDist)
 
     (setq LayerData (tblsearch "LAYER" *LEP-Layer-Route*))
     (setq WasOff (and LayerData (< (cdr (assoc 62 LayerData)) 0)))
@@ -604,6 +688,7 @@
 
     (setq SS (ssget "_X" (list '(0 . "LWPOLYLINE") (cons 8 *LEP-Layer-Route*))))
     (setq BestID nil)
+    (setq BestVClass nil)
     (setq BestDist nil)
 
     (if SS
@@ -619,6 +704,7 @@
                     (progn
                         (setq BestDist Dist)
                         (setq BestID (LEP:GetDataValue Ent "ID"))
+                        (setq BestVClass (LEP:GetDataValue Ent "VCLASS"))
                     )
                 )
 
@@ -633,7 +719,7 @@
         (command "_.-layer" "_Off" *LEP-Layer-Route* "")
     )
 
-    BestID
+    (list BestID BestVClass)
 )
 
 
@@ -654,7 +740,7 @@
 ; Enter без точки - выход из цикла.
 ;=====================================================================
 
-(defun C:LEP-POLE-ALONE (/ ClickPoint PoleType Status PoleEnt RouteID OldError LEP-CatchResult)
+(defun C:LEP-POLE-ALONE (/ ClickPoint PoleType Status PoleEnt RouteID VClass ClassLabel RouteFound OldError LEP-CatchResult)
 
     (setq OldError *error*)
     (defun *error* (msg)
@@ -684,30 +770,40 @@
                         (progn
                             (setq Status (LEP:GetPoleStatus))
 
-                            (setq PoleEnt (LEP:InsertPole ClickPoint PoleType Status))
+                            ;; Привязка к ближайшей трассе - см. предупреждение
+                            ;; в шапке LEP:FindNearestRoute про геометрическую
+                            ;; близость vs смысловую правильность. Делаем это
+                            ;; ДО подписи (а не после, как раньше) - подписи
+                            ;; теперь нужен класс линии, а он берётся именно
+                            ;; у той трассы, к которой опору привязали.
+                            (setq RouteFound (LEP:FindNearestRoute ClickPoint))
+                            (setq RouteID (car RouteFound))
+                            (setq VClass (cadr RouteFound))
+                            (setq ClassLabel (cdr (assoc VClass *LEP-VoltageClassLabel*)))
+
+                            (if RouteID
+                                (princ
+                                    (strcat
+                                        "\n[LEP-POLE-ALONE] Опора привязана к трассе "
+                                        RouteID
+                                        " (ближайшая, определена автоматически - проверьте, что это верно)."
+                                    )
+                                )
+                                (progn
+                                    (setq RouteID "БЕЗ_ТРАССЫ")
+                                    (princ "\n[LEP-POLE-ALONE] На чертеже не найдено ни одной трассы - опора без привязки.")
+                                )
+                            )
+
+                            ;; Разворот по маршруту здесь не считаем (опора не
+                            ;; лежит ни на каком отрезке трассы, "направления"
+                            ;; для неё физически нет) - ставим символ без
+                            ;; поворота (0.0 радиан).
+                            (setq PoleEnt (LEP:InsertPole ClickPoint 0.0 PoleType Status))
 
                             (if PoleEnt
                                 (progn
-                                    (LEP:CreatePoleLabel ClickPoint PoleType Status)
-
-                                    ;; Привязка к ближайшей трассе - см. предупреждение
-                                    ;; в шапке LEP:FindNearestRoute про геометрическую
-                                    ;; близость vs смысловую правильность.
-                                    (setq RouteID (LEP:FindNearestRoute ClickPoint))
-                                    (if RouteID
-                                        (princ
-                                            (strcat
-                                                "\n[LEP-POLE-ALONE] Опора привязана к трассе "
-                                                RouteID
-                                                " (ближайшая, определена автоматически - проверьте, что это верно)."
-                                            )
-                                        )
-                                        (progn
-                                            (setq RouteID "БЕЗ_ТРАССЫ")
-                                            (princ "\n[LEP-POLE-ALONE] На чертеже не найдено ни одной трассы - опора без привязки.")
-                                        )
-                                    )
-
+                                    (LEP:CreatePoleLabel ClickPoint PoleType Status ClassLabel *LEP-Label-Angle-Default*)
                                     (LEP:AddPoleData PoleEnt RouteID PoleType)
                                 )
                             )
@@ -735,5 +831,5 @@
 )
 
 
-(princ "\nLEP-POLE v0.5 загружен (ручная расстановка опор с врезкой вершины в линию, + LEP-POLE-ALONE).")
+(princ "\nLEP-POLE v0.8 загружен (направление подписи параметром, фикс GEOMCONSTRAINT).")
 (princ)
