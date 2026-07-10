@@ -2,7 +2,21 @@
 ;
 ;   ПРОЕКТ:      LEP
 ;   ФАЙЛ:        LEP-SPAN.LSP
-;   ВЕРСИЯ:      0.2  (испр. Claude)
+;   ВЕРСИЯ:      0.3  (запас длины + размерная линия - Claude)
+;
+;   ДОБАВЛЕНО В ЭТОЙ ВЕРСИИ:
+;   Расстояние между опорами (по прямой) и реальная длина провода/
+;   кабеля, которую нужно закупить - теперь РАЗНЫЕ величины:
+;     - LEP:GetRealLength - ВЛ получает запас на провис в процентах
+;       (*LEP-Sag-VL*), КЛ - фиксированный запас на подъём на опору
+;       (*LEP-KL-Reserve*), обе настройки в LEP-CONFIG.LSP. Результат
+;       округляется ВВЕРХ до целого метра (для закупки материала) -
+;       именно эта величина теперь и в подписи пролёта, и в XDATA
+;       LENGTH (а значит и в ведомости LEP-REPORT).
+;     - LEP:CreateSpanDimension - отдельная размерная линия (стрелками,
+;       слой LEP-DIM) с ПРЯМЫМ расстоянием между опорами, округлённым
+;       по обычным правилам математики (LEP:RoundNearest) - это уже
+;       не про материал, а про геометрию, для наглядности на чертеже.
 ;
 ;   ПЕРЕДЕЛАНО ПОЛНОСТЬЮ:
 ;   Старая версия выделяла ВСЮ полилинию маршрута целиком и красила
@@ -198,29 +212,129 @@
 ; LEP:GetSpanLength
 ;
 ; Суммарная длина пролёта - сумма расстояний между соседними точками
-; списка SubVerts (для прямых участков без дуг).
+; списка SubVerts (для прямых участков без дуг). Это геометрический
+; путь ВДОЛЬ трассы - используется как основа для расчёта реальной
+; длины материала (LEP:GetRealLength), НЕ то же самое, что прямое
+; расстояние между самими опорами (см. LEP:CreateSpanDimension).
 ;=====================================================================
- 
+
 (defun LEP:GetSpanLength (SubVerts / i Total)
- 
+
     (setq Total 0.0)
     (setq i 0)
- 
+
     (while (< i (1- (length SubVerts)))
         (setq Total (+ Total (distance (nth i SubVerts) (nth (1+ i) SubVerts))))
         (setq i (1+ i))
     )
- 
+
     Total
 )
- 
- 
+
+
+;=====================================================================
+; LEP:GetRealLength
+;
+; Реальная длина провода/кабеля с запасом - ОТДЕЛЬНАЯ величина от
+; расстояния между опорами. Разные формулы для ВЛ и КЛ (обе настройки
+; в LEP-CONFIG.LSP):
+;   ВЛ - провод провисает между опорами (стрела провеса), нужен запас
+;        в процентах от длины (*LEP-Sag-VL*, по умолчанию 2%);
+;   КЛ - кабель в земле НЕ провисает, но с каждой стороны пролёта ему
+;        нужно подняться от земли на опору - фиксированный запас в
+;        метрах на весь пролёт (*LEP-KL-Reserve*, по умолчанию 6 м).
+; Результат ВСЕГДА округляется ВВЕРХ до целого метра (LEP:RoundUp,
+; LEP-UTILS.LSP) - для закупки материала округлять вниз нельзя, не
+; хватит на монтаже.
+;
+; Запас на муфты/разделку кабеля СОЗНАТЕЛЬНО не считается - остаётся
+; на усмотрение проектировщика при подготовке настоящей сметы, эта
+; программа даёт только черновую прикидку.
+;
+; TypeCode - "VL" или "KL" (cdr от LineType - см. C:LEP-SPAN).
+;=====================================================================
+
+(defun LEP:GetRealLength (TypeCode SpanLength)
+    (if (= TypeCode "VL")
+        (LEP:RoundUp (* SpanLength (+ 1.0 (/ *LEP-Sag-VL* 100.0))))
+        (LEP:RoundUp (+ SpanLength *LEP-KL-Reserve*))
+    )
+)
+
+
+;=====================================================================
+; LEP:CreateSpanDimension
+;
+; Линейный размер (стрелками, LEP-DIM слой) между двумя опорами
+; пролёта - ПРЯМОЕ расстояние P1-P2 (не путь вдоль трассы, а "по
+; линейке от опоры до опоры", как в классическом черчении). Это
+; ОТДЕЛЬНАЯ величина от реальной длины провода/кабеля с запасом
+; (LEP:GetRealLength) - показывает геометрию, а не сколько материала
+; нужно закупить.
+;
+; Размерная линия сдвинута от прямой P1-P2 ПЕРПЕНДИКУЛЯРНО на
+; *LEP-LeaderOffset*, чтобы не накладываться на сам нарисованный
+; пролёт (перпендикуляр к направлению P1->P2, а не диагональный
+; сдвиг, как у текстовых подписей - для размерной линии так привычнее
+; и аккуратнее смотрится).
+;
+; Текст размера ПЕРЕОПРЕДЕЛЁН вручную через опцию "_Text" у DIMLINEAR
+; на заранее округлённое DimDistance (целое число метров по обычным
+; правилам округления - см. LEP:RoundNearest в C:LEP-SPAN) - без
+; этого DIMLINEAR сам измерил бы точное расстояние с дробной частью,
+; а нам нужно именно круглое число. Порядок аргументов у DIMLINEAR с
+; "_Text" проверен вживую в консоли AutoCAD перед тем, как здесь
+; появиться (см. историю чата/коммитов - уже несколько раз обжигались
+; на неправильном порядке аргументов у command).
+;=====================================================================
+
+(defun LEP:CreateSpanDimension (P1 P2 DimDistance / OldLayer Dx Dy Len Nx Ny MidX MidY DimLocPt DimText)
+
+    (setq OldLayer (getvar "CLAYER"))
+    (LEP:SetCurrentLayer *LEP-Layer-Dim*)
+
+    (setq Dx (- (car P2) (car P1)))
+    (setq Dy (- (cadr P2) (cadr P1)))
+    (setq Len (distance P1 P2))
+
+    (if (> Len 1e-9)
+        (progn
+            ;; Единичный перпендикуляр к направлению P1->P2 - в какую
+            ;; сторону сдвинуть размерную линию от самого пролёта.
+            (setq Nx (/ (- Dy) Len))
+            (setq Ny (/ Dx Len))
+
+            (setq MidX (/ (+ (car P1) (car P2)) 2.0))
+            (setq MidY (/ (+ (cadr P1) (cadr P2)) 2.0))
+
+            (setq DimLocPt
+                (list
+                    (+ MidX (* Nx *LEP-LeaderOffset*))
+                    (+ MidY (* Ny *LEP-LeaderOffset*))
+                )
+            )
+
+            (setq DimText (strcat (itoa DimDistance) " м"))
+
+            (command "_.DIMLINEAR" P1 P2 "_Text" DimText DimLocPt)
+        )
+    )
+
+    (setvar "CLAYER" OldLayer)
+)
+
+
 ;=====================================================================
 ; LEP:CreateSpanLabel
 ;
 ; Подпись-выноска у пролёта: статус + марка провода/кабеля + длина.
 ; Формат статуса тот же, что у опор (LEP:CreatePoleLabel) - "Проект."
 ; / "Сущ." - для единообразия подписей на чертеже.
+;
+; SpanLen - теперь РЕАЛЬНАЯ длина материала с запасом (см.
+; LEP:GetRealLength), уже округлённая ВВЕРХ до целого метра, а не
+; сырое геометрическое расстояние, как раньше - поэтому выводится
+; просто целым числом (itoa), без десятичного разряда.
 ;=====================================================================
 
 (defun LEP:CreateSpanLabel (SubVerts WireName SpanLen Status / MidPt TextPt LabelText OldLayer FirstPt LastPt StatusText)
@@ -251,7 +365,7 @@
     )
 
     (setq LabelText
-        (strcat StatusText " " WireName ", L=" (rtos SpanLen 2 1) " м")
+        (strcat StatusText " " WireName ", L=" (itoa SpanLen) " м")
     )
  
     ;; После двух точек LEADER просит 3 ответа: пусто (закончить линию),
@@ -272,7 +386,8 @@
 ;=====================================================================
  
 (defun C:LEP-SPAN (/ Route RouteID Verts P1 P2 Idx1 Idx2 SubVerts LineType WireList WireChoice
-                     LayerName LtName LtFile SpanEnt SpanLength Status OldOs OldError LEP-CatchResult)
+                     LayerName LtName LtFile SpanEnt SpanLength RealLength DimDistance
+                     Status OldOs OldError LEP-CatchResult)
 
     (setq OldError *error*)
     (defun *error* (msg)
@@ -369,9 +484,21 @@
                                                             (setq Status (LEP:GetStatus "пролёта"))
 
                                                             (setq SpanEnt (LEP:CreateSpanEntity SubVerts LayerName LtName))
-                                                            (setq SpanLength (LEP:GetSpanLength SubVerts))
 
-                                                            ;; Данные для ведомости: трасса, статус, марка, сечение, длина
+                                                            ;; SpanLength - геометрический путь вдоль трассы (может
+                                                            ;; не совпадать с прямым расстоянием P1-P2, если между
+                                                            ;; опорами есть изгиб без опоры) - основа для расчёта
+                                                            ;; РЕАЛЬНОЙ длины материала с запасом (RealLength).
+                                                            ;; DimDistance - ПРЯМОЕ расстояние между самими опорами,
+                                                            ;; для размерной линии - отдельная величина, см. шапки
+                                                            ;; LEP:GetRealLength / LEP:CreateSpanDimension выше.
+                                                            (setq SpanLength (LEP:GetSpanLength SubVerts))
+                                                            (setq RealLength (LEP:GetRealLength (cdr LineType) SpanLength))
+                                                            (setq DimDistance (LEP:RoundNearest (distance P1 P2)))
+
+                                                            ;; Данные для ведомости: трасса, статус, марка, сечение,
+                                                            ;; РЕАЛЬНАЯ длина с запасом (не сырое расстояние) - чтобы
+                                                            ;; ведомость и подпись на чертеже показывали одно и то же.
                                                             (LEP:SetData SpanEnt
                                                                 (list
                                                                     (cons "TYPE" "SPAN")
@@ -379,11 +506,12 @@
                                                                     (cons "STATUS" Status)
                                                                     (cons "WIRE" (car WireChoice))
                                                                     (cons "SECTION" (cdr WireChoice))
-                                                                    (cons "LENGTH" (rtos SpanLength 2 3))
+                                                                    (cons "LENGTH" (itoa RealLength))
                                                                 )
                                                             )
 
-                                                            (LEP:CreateSpanLabel SubVerts (car WireChoice) SpanLength Status)
+                                                            (LEP:CreateSpanLabel SubVerts (car WireChoice) RealLength Status)
+                                                            (LEP:CreateSpanDimension P1 P2 DimDistance)
                                                         )
                                                     )
                                                 )
@@ -419,5 +547,5 @@
 )
  
  
-(princ "\nLEP-SPAN v0.2 загружен (пролёты вырезаются отдельными объектами, без CHPROP).")
+(princ "\nLEP-SPAN v0.3 загружен (запас длины ВЛ/КЛ, размерная линия между опорами).")
 (princ)

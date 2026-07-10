@@ -2,9 +2,16 @@
 ;
 ;   ПРОЕКТ:      LEP
 ;   ФАЙЛ:        LEP-POLE.LSP
-;   ВЕРСИЯ:      0.4  (испр. Claude)
+;   ВЕРСИЯ:      0.5  (добавлена LEP-POLE-ALONE - Claude)
 ;
-;   ИСПРАВЛЕНО/ПЕРЕДЕЛАНО В ЭТОЙ ВЕРСИИ:
+;   ДОБАВЛЕНО В ЭТОЙ ВЕРСИИ:
+;   Новая команда C:LEP-POLE-ALONE - опора БЕЗ привязки к трассе
+;   (вставляется ровно в клик, без проекции/вершины/GEOMCONSTRAINT,
+;   свободно двигается потом). Для ведомости всё равно привязывается
+;   к БЛИЖАЙШЕЙ трассе по ID (LEP:FindNearestRoute) - см. !! ПОДВОДНЫЙ
+;   КАМЕНЬ !! в шапке этой функции и в LEP-README.md.
+;
+;   ИСПРАВЛЕНО/ПЕРЕДЕЛАНО РАНЕЕ:
 ;
 ;   ГЛАВНОЕ ИЗМЕНЕНИЕ ЛОГИКИ (по вашей просьбе):
 ;   Раньше опоры расставлялись АВТОМАТИЧЕСКИ по всем уже существующим
@@ -560,5 +567,173 @@
 )
  
  
-(princ "\nLEP-POLE v0.4 загружен (ручная расстановка опор с врезкой вершины в линию).")
+;=====================================================================
+; LEP:FindNearestRoute
+;
+; Ищет, к какой трассе на чертеже точка P ближе всего ГЕОМЕТРИЧЕСКИ -
+; перебирает ВСЕ полилинии на служебном слое маршрутов
+; (*LEP-Layer-Route*), для каждой находит ближайшую точку (тот же
+; LEP:FindNearestSegment, что и для одной трассы в обычной LEP-POLE),
+; берёт ID трассы с минимальным расстоянием.
+;
+; !! ВАЖНО - ПОДВОДНЫЙ КАМЕНЬ, см. LEP-README.md !!
+; "Ближайшая ГЕОМЕТРИЧЕСКИ" не всегда значит "правильная ПО СМЫСЛУ" -
+; если отдельная опора стоит близко к границе между территориями двух
+; разных заявителей, автоматика молча привяжет её к не той трассе.
+; Вызывающая сторона (C:LEP-POLE-ALONE) печатает в консоль, к какой
+; трассе привязалась опора - ПРОВЕРЯЙТЕ этот вывод глазами.
+;
+; Слой маршрутов обычно ВЫКЛЮЧЕН (LEP-ROUTEVIS) - ssget без явного
+; включения слоя не увидел бы на нём ничего. Поэтому здесь слой
+; временно включается на время поиска (если был выключен) и
+; возвращается в исходное состояние сразу после - той же логикой
+; "по знаку цвета в таблице слоёв", что и в C:LEP-ROUTEVIS.
+;
+; Возвращает: ID трассы (строка) или nil, если на чертеже нет ни
+; одной трассы вообще.
+;=====================================================================
+
+(defun LEP:FindNearestRoute (P / LayerData WasOff SS i Ent Verts Nearest Dist BestID BestDist)
+
+    (setq LayerData (tblsearch "LAYER" *LEP-Layer-Route*))
+    (setq WasOff (and LayerData (< (cdr (assoc 62 LayerData)) 0)))
+
+    (if WasOff
+        (command "_.-layer" "_On" *LEP-Layer-Route* "")
+    )
+
+    (setq SS (ssget "_X" (list '(0 . "LWPOLYLINE") (cons 8 *LEP-Layer-Route*))))
+    (setq BestID nil)
+    (setq BestDist nil)
+
+    (if SS
+        (progn
+            (setq i 0)
+            (repeat (sslength SS)
+                (setq Ent (ssname SS i))
+                (setq Verts (LEP:GetVertices Ent))
+                (setq Nearest (LEP:FindNearestSegment Verts P))
+                (setq Dist (distance P (cadr Nearest)))
+
+                (if (or (not BestDist) (< Dist BestDist))
+                    (progn
+                        (setq BestDist Dist)
+                        (setq BestID (LEP:GetDataValue Ent "ID"))
+                    )
+                )
+
+                (setq i (1+ i))
+            )
+        )
+    )
+
+    ;; Возвращаем слой в то состояние, в котором он был - не меняем
+    ;; ничего у пользователя незаметно для него.
+    (if WasOff
+        (command "_.-layer" "_Off" *LEP-Layer-Route* "")
+    )
+
+    BestID
+)
+
+
+;=====================================================================
+; C:LEP-POLE-ALONE - отдельная опора БЕЗ привязки к трассе
+;
+; То же самое, что обычная LEP-POLE (тип, статус, подпись, данные для
+; ведомости) - но БЕЗ проекции на маршрут, БЕЗ вставки вершины, БЕЗ
+; GEOMCONSTRAINT. Опора ставится РОВНО туда, куда кликнули, и потом
+; свободно двигается по чертежу - никаких привязок (OSMODE тоже не
+; трогается, в отличие от обычной LEP-POLE - тут не с чем магнититься
+; специально).
+;
+; Для ведомости опора всё равно привязывается к БЛИЖАЙШЕЙ трассе по
+; ID (см. LEP:FindNearestRoute) - см. предупреждение там же про
+; геометрическую близость vs смысловую правильность.
+;
+; Enter без точки - выход из цикла.
+;=====================================================================
+
+(defun C:LEP-POLE-ALONE (/ ClickPoint PoleType Status PoleEnt RouteID OldError LEP-CatchResult)
+
+    (setq OldError *error*)
+    (defun *error* (msg)
+        (setq *error* OldError)
+        (princ (strcat "\nКоманда прервана: " msg))
+        (princ)
+    )
+
+    (LEP:PrintHeader "Установка отдельной опоры (без привязки к трассе)")
+
+    (princ "\nКликайте точки установки опор в любом месте чертежа.")
+    (princ "\nПривязки (OSMODE) не трогаются - опора ставится ровно туда,")
+    (princ "\nкуда кликнули, и свободно двигается потом.")
+    (princ "\nEnter без точки - закончить.")
+
+    (setq ClickPoint (getpoint "\nТочка опоры (Enter - закончить): "))
+
+    (while ClickPoint
+
+        (setq LEP-CatchResult
+            (vl-catch-all-apply
+                '(lambda ()
+
+                    (setq PoleType (LEP:GetPoleType))
+
+                    (if PoleType
+                        (progn
+                            (setq Status (LEP:GetPoleStatus))
+
+                            (setq PoleEnt (LEP:InsertPole ClickPoint PoleType Status))
+
+                            (if PoleEnt
+                                (progn
+                                    (LEP:CreatePoleLabel ClickPoint PoleType Status)
+
+                                    ;; Привязка к ближайшей трассе - см. предупреждение
+                                    ;; в шапке LEP:FindNearestRoute про геометрическую
+                                    ;; близость vs смысловую правильность.
+                                    (setq RouteID (LEP:FindNearestRoute ClickPoint))
+                                    (if RouteID
+                                        (princ
+                                            (strcat
+                                                "\n[LEP-POLE-ALONE] Опора привязана к трассе "
+                                                RouteID
+                                                " (ближайшая, определена автоматически - проверьте, что это верно)."
+                                            )
+                                        )
+                                        (progn
+                                            (setq RouteID "БЕЗ_ТРАССЫ")
+                                            (princ "\n[LEP-POLE-ALONE] На чертеже не найдено ни одной трассы - опора без привязки.")
+                                        )
+                                    )
+
+                                    (LEP:AddPoleData PoleEnt RouteID PoleType)
+                                )
+                            )
+                        )
+                    )
+                )
+             '())
+        )
+
+        (if (vl-catch-all-error-p LEP-CatchResult)
+            (princ
+                (strcat
+                    "\n[LEP-POLE-ALONE] Ошибка на этой точке, пропускаю и продолжаю: "
+                    (vl-catch-all-error-message LEP-CatchResult)
+                )
+            )
+        )
+
+        (setq ClickPoint (getpoint "\nТочка опоры (Enter - закончить): "))
+    )
+
+    (setq *error* OldError)
+    (LEP:PrintFooter)
+    (princ)
+)
+
+
+(princ "\nLEP-POLE v0.5 загружен (ручная расстановка опор с врезкой вершины в линию, + LEP-POLE-ALONE).")
 (princ)

@@ -146,6 +146,7 @@
 (princ "\n LEP-ROUTE")
 (princ "\n LEP-ROUTEVIS")
 (princ "\n LEP-POLE")
+(princ "\n LEP-POLE-ALONE")
 (princ "\n LEP-SPAN")
 (princ "\n LEP-SCALE")
 (princ "\n LEP-REPORT")
