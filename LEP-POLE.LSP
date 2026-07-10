@@ -72,35 +72,18 @@
 )
  
  
-;=====================================================================
-; LEP:GetVertexList
-;
-; Возвращает список вершин полилинии (список точек (x y)), в порядке
-; их следования в объекте.
-;=====================================================================
- 
-(defun LEP:GetVertexList (Ent / EList Item Result)
- 
-    (setq EList (entget Ent))
-    (setq Result nil)
- 
-    (foreach Item EList
-        (if (= (car Item) 10)
-            (setq Result (append Result (list (cdr Item))))
-        )
-    )
- 
-    Result
-)
- 
- 
+;; LEP:GetVertexList убрана - дублировала LEP:GetVertices из
+;; LEP-POLYLINE.LSP один в один. Везде в этом файле используется
+;; LEP:GetVertices.
+
+
 ;=====================================================================
 ; LEP:FindNearestSegment
 ;
 ; Ищет, к какому отрезку маршрута ближе всего кликнутая точка.
 ;
 ; Вход:
-;   Verts - список вершин (результат LEP:GetVertexList)
+;   Verts - список вершин (результат LEP:GetVertices)
 ;   P     - кликнутая точка
 ;
 ; Выход: список (Idx ProjPoint), где
@@ -159,7 +142,7 @@
  
 (defun LEP:InsertVertexOnRoute (RouteEnt ClickPoint / Verts Found Idx NewPt NewVerts i V NewEList Item VertexInserted)
  
-    (setq Verts (LEP:GetVertexList RouteEnt))
+    (setq Verts (LEP:GetVertices RouteEnt))
     (setq Found (LEP:FindNearestSegment Verts ClickPoint))
     (setq Idx (car Found))
     (setq NewPt (cadr Found))
@@ -454,18 +437,20 @@
     (setq LabelText (strcat StatusText " оп. " PoleType))
  
     ;; Точка для текста - со смещением от опоры, чтобы не накладывалась
-    ;; на сам блок. *LEP-LeaderOffset* - настройка в LEP-CONFIG.LSP
-    ;; (если такой переменной ещё нет - добавьте:
-    ;;   (setq *LEP-LeaderOffset* 5.0)   ; метров, после калибровки
-    ;; ).
+    ;; на сам блок. *LEP-LeaderOffset* - настройка в LEP-CONFIG.LSP.
     (setq TextPoint
         (list
             (+ (car Point) *LEP-LeaderOffset*)
             (+ (cadr Point) *LEP-LeaderOffset*)
         )
     )
- 
-    (command "_.LEADER" Point TextPoint "" "" LabelText "")
+
+    ;; После двух точек LEADER просит 3 ответа: пусто (закончить линию),
+    ;; текст, пусто (закончить текст) - НЕ 4 (та же ошибка, что чинили
+    ;; в LEP-SPAN.LSP/LEP-ROUTE.LSP - лишний "" уводил в подменю
+    ;; [Tolerance/Copy/Mtext/...], а текст подписи прилетал туда
+    ;; невалидным ключевым словом, роняя команду с "syntax error").
+    (command "_.LEADER" Point TextPoint "" LabelText "")
  
     (setvar "CLAYER" OldLayer)
 )

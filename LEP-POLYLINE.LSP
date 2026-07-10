@@ -8,6 +8,13 @@
 ;
 ;   Работа с полилиниями.
 ;
+;   ПОЧИЩЕНО (аудит перед сном - Claude): раньше здесь были ещё
+;   LEP:GetVertexCount, LEP:GetSegmentLength, LEP:GetSegmentList -
+;   нигде в проекте не вызывались, убраны. Также раньше в LEP-POLE.LSP
+;   была своя копия LEP:GetVertices под именем LEP:GetVertexList,
+;   делавшая ровно то же самое - оставлена только одна версия, здесь,
+;   как "общая для всех" (этот файл грузится раньше POLE/ROUTE/SPAN).
+;
 ;=====================================================================
 
 
@@ -65,151 +72,6 @@
     Result
 
 )
-
-
-
-;=====================================================================
-;
-; LEP:GetVertexCount
-;
-;=====================================================================
-
-(defun LEP:GetVertexCount (Ent)
-
-    (length
-
-        (LEP:GetVertices Ent)
-
-    )
-
-)
-
-
-
-;=====================================================================
-;
-; LEP:GetSegmentLength
-;
-; Возвращает длину между двумя соседними вершинами.
-;
-;=====================================================================
-
-(defun LEP:GetSegmentLength
-
-(
-
-Ent
-
-Index
-
-/
-
-Vertices
-
-P1
-
-P2
-
-)
-
-    (setq Vertices
-
-        (LEP:GetVertices Ent)
-
-    )
-
-    (setq P1
-
-        (nth Index Vertices)
-
-    )
-
-    (setq P2
-
-        (nth
-
-            (+ Index 1)
-
-            Vertices
-
-        )
-
-    )
-
-    (distance P1 P2)
-
-)
-
-
-
-;=====================================================================
-;
-; LEP:GetSegmentList
-;
-; Возвращает список длин всех пролетов.
-;
-;=====================================================================
-
-(defun LEP:GetSegmentList
-
-(
-
-Ent
-
-/
-
-Vertices
-
-Result
-
-i
-
-)
-
-    (setq Vertices
-
-        (LEP:GetVertices Ent)
-
-    )
-
-    (setq Result nil)
-
-    (setq i 0)
-
-    (repeat
-
-        (- (length Vertices) 1)
-
-        (setq Result
-
-            (append
-
-                Result
-
-                (list
-
-                    (distance
-
-                        (nth i Vertices)
-
-                        (nth (+ i 1) Vertices)
-
-                    )
-
-                )
-
-            )
-
-        )
-
-        (setq i (1+ i))
-
-    )
-
-    Result
-
-)
-
 
 
 (princ "\nLEP-POLYLINE загружен.")
