@@ -2,9 +2,18 @@
 ;
 ;   ПРОЕКТ:      LEP
 ;   ФАЙЛ:        LEP-POLE.LSP
-;   ВЕРСИЯ:      0.8  (направление подписи параметром - Claude, 2026-07-10)
+;   ВЕРСИЯ:      0.9  (аудит Claude Fable, 2026-07-11)
 ;
-;   ДОБАВЛЕНО В ЭТОЙ ВЕРСИИ:
+;   ИСПРАВЛЕНО В ЭТОЙ ВЕРСИИ (аудит):
+;   - Тип и статус опоры спрашиваются ДО вставки вершины в маршрут -
+;     отмена выбора больше не оставляет лишнюю пустую вершину на
+;     полилинии (раньше каждая отменённая попытка засоряла трассу).
+;   - LEP:AddPoleData теперь получает НАСТОЯЩИЙ статус (был всегда
+;     "PROJECT" даже для Сущ. опор - см. фикс в LEP-DATA.LSP).
+;   - LEP-CatchResult объявлена локальной (утекала глобально).
+;   - Подсказка про LEP-ROUTEVIS в промпте выбора маршрута.
+;
+;   ДОБАВЛЕНО РАНЕЕ (направление подписи параметром):
 ;   LEP:CreatePoleLabel получила параметр OffsetAngle (направление
 ;   смещения подписи, радианы) - раньше направление было зашито прямо
 ;   в формулу (всегда 45°, вверх-вправо). Понадобилось для LEP-END:
@@ -520,7 +529,11 @@
 ; Enter без точки - выход из цикла.
 ;=====================================================================
  
-(defun C:LEP-POLE (/ Route RouteID VClass ClassLabel OldOs OldError ClickPoint InsertResult NewVertex Rotation PoleType Status PoleEnt)
+;; LEP-CatchResult в списке локальных (⚠️ ФИКС 2026-07-11, аудит):
+;; раньше не был объявлен и утекал глобальной переменной - безвредно
+;; само по себе, но ровно этот класс неявных глобалов уже давал
+;; трудноуловимый баг с *LEP-UseDCL*/boundp (см. LEP:GetPoleType).
+(defun C:LEP-POLE (/ Route RouteID VClass ClassLabel OldOs OldError ClickPoint InsertResult NewVertex Rotation PoleType Status PoleEnt LEP-CatchResult)
  
     (setq OldError *error*)
     (defun *error* (msg)
@@ -532,11 +545,11 @@
  
     (LEP:PrintHeader "Установка опор (ручная)")
  
-    (setq Route (car (entsel "\nВыберите полилинию маршрута: ")))
- 
+    (setq Route (car (entsel "\nВыберите полилинию маршрута (если не видна - включите LEP-ROUTEVIS): ")))
+
     (if Route
         (progn
- 
+
             (setq RouteID (LEP:GetDataValue Route "ID"))
             (if (not RouteID) (setq RouteID "LEP_ROUTE_UNKNOWN"))
 
@@ -565,22 +578,30 @@
                 (setq LEP-CatchResult
                     (vl-catch-all-apply
                         '(lambda ()
- 
-                            ;; 1. Находим ближайшую точку на линии и
-                            ;;    вставляем туда новую вершину полилинии.
-                            ;;    Заодно получаем концы отрезка маршрута
-                            ;;    под ней - нужны для разворота символа
-                            ;;    опоры по направлению трассы.
-                            (setq InsertResult (LEP:InsertVertexOnRoute Route ClickPoint))
-                            (setq NewVertex (car InsertResult))
-                            (setq Rotation (LEP:GetPoleRotation (cadr InsertResult) (caddr InsertResult)))
 
-                            ;; 2. Спрашиваем тип и статус опоры.
+                            ;; 1. Спрашиваем тип и статус опоры - ДО
+                            ;;    вставки вершины (⚠️ ФИКС 2026-07-11,
+                            ;;    аудит: раньше вершина вставлялась в
+                            ;;    полилинию ПЕРВОЙ, до вопросов - отмена
+                            ;;    выбора типа (Enter/Esc) оставляла на
+                            ;;    маршруте лишнюю "пустую" вершину без
+                            ;;    опоры при каждой отменённой попытке).
+                            ;;    Тип и статус от геометрии не зависят,
+                            ;;    порядок вопросов безопасно менять.
                             (setq PoleType (LEP:GetPoleType))
 
                             (if PoleType
                                 (progn
                                     (setq Status (LEP:GetPoleStatus))
+
+                                    ;; 2. Находим ближайшую точку на линии и
+                                    ;;    вставляем туда новую вершину полилинии.
+                                    ;;    Заодно получаем концы отрезка маршрута
+                                    ;;    под ней - нужны для разворота символа
+                                    ;;    опоры по направлению трассы.
+                                    (setq InsertResult (LEP:InsertVertexOnRoute Route ClickPoint))
+                                    (setq NewVertex (car InsertResult))
+                                    (setq Rotation (LEP:GetPoleRotation (cadr InsertResult) (caddr InsertResult)))
 
                                     ;; 3. Вставляем символ опоры (1/2/3
                                     ;;    трапеции по типу) в новую вершину.
@@ -613,8 +634,10 @@
                                             ;; 5. Подпись-выноска (2 строки).
                                             (LEP:CreatePoleLabel NewVertex PoleType Status ClassLabel *LEP-Label-Angle-Default*)
 
-                                            ;; 6. Данные для ведомости.
-                                            (LEP:AddPoleData PoleEnt RouteID PoleType)
+                                            ;; 6. Данные для ведомости (Status
+                                            ;;    теперь настоящий - см. фикс в
+                                            ;;    LEP:AddPoleData, LEP-DATA.LSP).
+                                            (LEP:AddPoleData PoleEnt RouteID PoleType Status)
                                         )
                                     )
                                 )
@@ -804,7 +827,9 @@
                             (if PoleEnt
                                 (progn
                                     (LEP:CreatePoleLabel ClickPoint PoleType Status ClassLabel *LEP-Label-Angle-Default*)
-                                    (LEP:AddPoleData PoleEnt RouteID PoleType)
+                                    ;; Status теперь настоящий - см. фикс в
+                                    ;; LEP:AddPoleData (LEP-DATA.LSP).
+                                    (LEP:AddPoleData PoleEnt RouteID PoleType Status)
                                 )
                             )
                         )
@@ -831,5 +856,5 @@
 )
 
 
-(princ "\nLEP-POLE v0.8 загружен (направление подписи параметром, фикс GEOMCONSTRAINT).")
+(princ "\nLEP-POLE v0.9 загружен (аудит: порядок вопросов, честный STATUS).")
 (princ)
