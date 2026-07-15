@@ -7,6 +7,7 @@
 ;   LEP-ROUTE.LSP
 ;
 ;   ВЕРСИЯ:
+;   0.5  (LEP:CreateRouteLabel: LEADER -> MLEADER, Claude, 2026-07-15)
 ;   0.4  (обработчик ошибок: Esc при рисовании больше не оставляет
 ;   текущим служебный слой - аудит Claude Fable, 2026-07-11)
 ;
@@ -68,12 +69,11 @@
         )
     )
 
-    ;; После двух точек LEADER просит 3 ответа: пусто (закончить
-    ;; линию), текст, пусто (закончить текст) - НЕ 4 (см. фикс этой
-    ;; же ошибки в LEP-SPAN.LSP/LEP:CreateSpanLabel - лишний "" уводит
-    ;; в подменю [Tolerance/Copy/Mtext/...], а текст подписи прилетает
-    ;; туда невалидным ключевым словом).
-    (command "_.LEADER" Point TextPoint "" LabelText "")
+    ;; МИГРАЦИЯ 2026-07-15: LEADER -> MLEADER (см. LEP-CONFIG.LSP,
+    ;; раздел "СТИЛЬ ВЫНОСОК MLEADER"). Вызов проще, чем у LEADER -
+    ;; просто две точки и текст, без "пусто"-ответов на промежуточные
+    ;; промпты.
+    (command "_.MLEADER" Point TextPoint LabelText)
 
     (setvar "CLAYER" OldLayer)
 )
