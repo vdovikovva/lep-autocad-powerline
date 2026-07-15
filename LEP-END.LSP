@@ -2,7 +2,10 @@
 ;
 ;   ПРОЕКТ:      LEP
 ;   ФАЙЛ:        LEP-END.LSP
-;   ВЕРСИЯ:      0.4  (фикс направления опор МТП + одна концовка за
+;   ВЕРСИЯ:      0.5  (статус Сущ./Проект. для оконечного оборудования +
+;                фикс направления МТП с любого конца маршрута -
+;                Claude, 2026-07-15)
+;   0.4  (фикс направления опор МТП + одна концовка за
 ;                запуск - аудит Claude Fable, 2026-07-11)
 ;
 ;   ИСПРАВЛЕНО В ЭТОЙ ВЕРСИИ:
@@ -52,10 +55,30 @@
 ;   НЕ проецируются на маршрут - вставляются дальше по направлению
 ;   трассы (за пределами нарисованной полилинии).
 ;
-;   Тип опоры и статус для МТП/ПУ ЗАФИКСИРОВАНЫ (не спрашиваются) -
-;   по прямому указанию пользователя: тип всегда *LEP-End-PoleType*
-;   ("П20-3Н"), статус всегда "Проект." (существующего МТП/ПУ через
-;   эту команду не бывает).
+;   Тип опоры для МТП/ПУ ЗАФИКСИРОВАН (не спрашивается) - по прямому
+;   указанию пользователя: всегда *LEP-End-PoleType* ("П20-3Н").
+;
+;   ⚠️ ФИКС 2026-07-15: статус (Проект./Сущ.) раньше был зашит намертво
+;   ("существующего МТП/ПУ не бывает") - оказалось, бывает: иногда
+;   нужно начертить УЖЕ СУЩЕСТВУЮЩЕЕ оконечное оборудование (например
+;   при подключении к уже стоящей подстанции), а не только то, что
+;   проектируется - иначе оно попадало бы в ведомость проектируемых
+;   материалов как новое. Теперь статус спрашивается ОДИН раз на весь
+;   блок (как и тип ПУ/МТП) - LEP:GetStatus, та же общая функция,
+;   что и у обычных опор в LEP-POLE.LSP.
+;
+;   ⚠️ ФИКС 2026-07-15: опоры 2/3 блока МТП (были ПУ - тут только
+;   одна опора, вопрос не встаёт) раньше уезжали ДАЛЬШЕ ПО RouteDir
+;   БЕЗУСЛОВНО - а RouteDir это направление ЛОКАЛЬНОГО отрезка трассы
+;   под точкой клика (от его начала к концу), не "куда от маршрута
+;   наружу". Если ставить МТП у ПОСЛЕДНЕЙ вершины маршрута - это
+;   работало верно (опоры уезжали за пределы линии). Если у ПЕРВОЙ
+;   вершины - RouteDir "смотрел" вдоль маршрута ВНУТРЬ, и опоры 2/3
+;   налезали на уже нарисованную трассу и её опоры. Теперь направление
+;   разворачивается на 180°, если точка установки ближе к ПЕРВОЙ
+;   вершине маршрута, чем к ПОСЛЕДНЕЙ (сравнение расстояний через
+;   LEP:GetVertices) - блок МТП теперь всегда уезжает НАРУЖУ от
+;   маршрута, с какого конца трассы его ни ставь.
 ;
 ;=====================================================================
 
@@ -70,8 +93,8 @@
 ; (крайне редкий случай) - просто запустить LEP-END снова.
 ;=====================================================================
 
-(defun C:LEP-END (/ Route RouteID Choice EndType ClickPoint InsertResult
-                    Pt1 Pt2 Pt3 Rotation RouteDir Ent1 Ent2 Ent3 OldOs OldError)
+(defun C:LEP-END (/ Route RouteID Choice EndType Status ClickPoint InsertResult
+                    Pt1 Pt2 Pt3 Rotation RouteDir RouteVerts Ent1 Ent2 Ent3 OldOs OldError)
 
     (setq OldError *error*)
     (defun *error* (msg)
@@ -108,6 +131,12 @@
                 (progn
 
                     (setq EndType (cdr Choice))
+
+                    ;; Статус - ОДИН раз на весь блок (как и тип), см.
+                    ;; ФИКС 2026-07-15 в шапке файла - существующее
+                    ;; оконечное оборудование тоже бывает.
+                    (setq Status (LEP:GetStatus "оконечного оборудования"))
+
                     (setq ClickPoint (getpoint "\nТочка установки (рядом с концом трассы): "))
 
                     (if ClickPoint
@@ -127,7 +156,19 @@
                             (setq Rotation (LEP:GetPoleRotation (cadr InsertResult) (caddr InsertResult)))
                             (setq RouteDir (angle (cadr InsertResult) (caddr InsertResult)))
 
-                            (setq Ent1 (LEP:InsertPole Pt1 Rotation *LEP-End-PoleType* "PROJECT"))
+                            ;; ФИКС 2026-07-15 (см. шапку файла): RouteDir
+                            ;; выше - направление ЛОКАЛЬНОГО отрезка, не
+                            ;; "наружу от маршрута". Если Pt1 ближе к
+                            ;; ПЕРВОЙ вершине маршрута, чем к ПОСЛЕДНЕЙ -
+                            ;; разворачиваем на 180°, чтобы опоры 2/3
+                            ;; блока МТП всегда уезжали наружу, а не в
+                            ;; тело уже нарисованной трассы.
+                            (setq RouteVerts (LEP:GetVertices Route))
+                            (if (< (distance Pt1 (car RouteVerts)) (distance Pt1 (last RouteVerts)))
+                                (setq RouteDir (+ RouteDir pi))
+                            )
+
+                            (setq Ent1 (LEP:InsertPole Pt1 Rotation *LEP-End-PoleType* Status))
                             (command "_.GEOMCONSTRAINT" "_COincident" Ent1 Pt1 Route Pt1 "")
 
                             ;; ⚠️ Страховка (см. LEP-POLE.LSP) - пустой (command)
@@ -139,8 +180,8 @@
                             (if (= EndType "PU")
 
                                 (progn
-                                    (LEP:CreatePoleLabel Pt1 *LEP-End-PoleType* "PROJECT" *LEP-Label-PU* *LEP-Label-Angle-Default*)
-                                    (LEP:AddEquipData Ent1 RouteID *LEP-End-PoleType* "PU")
+                                    (LEP:CreatePoleLabel Pt1 *LEP-End-PoleType* Status *LEP-Label-PU* *LEP-Label-Angle-Default*)
+                                    (LEP:AddEquipData Ent1 RouteID *LEP-End-PoleType* "PU" Status)
                                     (princ "\n[LEP-END] Установлена опора с ПУ.")
                                 )
 
@@ -151,8 +192,8 @@
                                     ;; друг к другу (шаг 3м/2м), при одинаковом
                                     ;; направлении подписи накладывались друг на
                                     ;; друга (замечено пользователем на тесте).
-                                    (LEP:CreatePoleLabel Pt1 *LEP-End-PoleType* "PROJECT" *LEP-Label-RLK* *LEP-End-LabelAngle-RLK*)
-                                    (LEP:AddEquipData Ent1 RouteID *LEP-End-PoleType* "RLK")
+                                    (LEP:CreatePoleLabel Pt1 *LEP-End-PoleType* Status *LEP-Label-RLK* *LEP-End-LabelAngle-RLK*)
+                                    (LEP:AddEquipData Ent1 RouteID *LEP-End-PoleType* "RLK" Status)
 
                                     ;; Опора 2 (МТП) - дальше ПО НАПРАВЛЕНИЮ
                                     ;; МАРШРУТА (RouteDir, НЕ Rotation - см.
@@ -166,9 +207,9 @@
                                             (+ (cadr Pt1) (* *LEP-End-MTP-Spacing1* (sin RouteDir)))
                                         )
                                     )
-                                    (setq Ent2 (LEP:InsertPole Pt2 Rotation *LEP-End-PoleType* "PROJECT"))
-                                    (LEP:CreatePoleLabel Pt2 *LEP-End-PoleType* "PROJECT" *LEP-Label-MTP* *LEP-End-LabelAngle-MTP*)
-                                    (LEP:AddEquipData Ent2 RouteID *LEP-End-PoleType* "MTP")
+                                    (setq Ent2 (LEP:InsertPole Pt2 Rotation *LEP-End-PoleType* Status))
+                                    (LEP:CreatePoleLabel Pt2 *LEP-End-PoleType* Status *LEP-Label-MTP* *LEP-End-LabelAngle-MTP*)
+                                    (LEP:AddEquipData Ent2 RouteID *LEP-End-PoleType* "MTP" Status)
 
                                     ;; Опора 3 (ЩУ) - ещё дальше по маршруту на
                                     ;; *LEP-End-MTP-Spacing2* м от опоры 2.
@@ -178,9 +219,9 @@
                                             (+ (cadr Pt2) (* *LEP-End-MTP-Spacing2* (sin RouteDir)))
                                         )
                                     )
-                                    (setq Ent3 (LEP:InsertPole Pt3 Rotation *LEP-End-PoleType* "PROJECT"))
-                                    (LEP:CreatePoleLabel Pt3 *LEP-End-PoleType* "PROJECT" *LEP-Label-SchU* *LEP-End-LabelAngle-SchU*)
-                                    (LEP:AddEquipData Ent3 RouteID *LEP-End-PoleType* "SCHU")
+                                    (setq Ent3 (LEP:InsertPole Pt3 Rotation *LEP-End-PoleType* Status))
+                                    (LEP:CreatePoleLabel Pt3 *LEP-End-PoleType* Status *LEP-Label-SchU* *LEP-End-LabelAngle-SchU*)
+                                    (LEP:AddEquipData Ent3 RouteID *LEP-End-PoleType* "SCHU" Status)
 
                                     (princ "\n[LEP-END] Установлен блок МТП (3 опоры: РЛК/МТП/ЩУ).")
                                 )
