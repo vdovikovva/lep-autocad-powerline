@@ -7,6 +7,9 @@
 ;   LEP-SETUP.LSP
 ;
 ;   ВЕРСИЯ:
+;   0.7  (DIMTIH/DIMTOH/DIMTAD - текст размерной линии пролёта
+;        поворачивается вместе с линией и садится над ней - Claude,
+;        2026-07-15)
 ;   0.6  (LEP:CreateMLeaderStyle - настройка стиля "Standard" MLEADER
 ;        под подписи проекта, миграция с LEADER - Claude, 2026-07-15)
 ;
@@ -453,6 +456,15 @@
     ;; подтверждено живым тестом 2026-07-11). Заодно мельчают стрелки
     ;; размерных линий пролётов - сознательно.
     (setvar "DIMASZ" *LEP-Dim-ArrowSize*)
+
+    ;; Текст размерной линии пролёта поворачивается вместе с линией и
+    ;; садится НАД ней (не разрывает её) - см. подробное обоснование в
+    ;; LEP-CONFIG.LSP, раздел "ОРИЕНТАЦИЯ ТЕКСТА РАЗМЕРНОЙ ЛИНИИ
+    ;; ПРОЛЁТА". Раньше эти переменные не трогались вообще - дефолт
+    ;; AutoCAD (DIMTIH/DIMTOH=1) держал текст всегда горизонтальным.
+    (setvar "DIMTIH" *LEP-Dim-TextInsideHorizontal*)
+    (setvar "DIMTOH" *LEP-Dim-TextOutsideHorizontal*)
+    (setvar "DIMTAD" *LEP-Dim-TextAbove*)
 
     ;; Стиль выносок MLEADER (полка/стрелка/высота текста/подчёркивание) -
     ;; миграция подписей с LEADER на MLEADER, см. LEP:CreateMLeaderStyle
