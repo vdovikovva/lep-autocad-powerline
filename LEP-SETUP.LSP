@@ -243,11 +243,24 @@
 ; (уже ловили этот баг живьём: entmod падал с "bad argument type:
 ; lentityp nil").
 ;
-; Правим ТОЧЕЧНО, через entget/subst/entmod, только 9 конкретных
-; DXF-групп (42/43/44/45/93/174/178/295/298) - все остальные поля
-; записи (включая хендлы на другие объекты чертежа, группы
-; 340/341/342/343) остаются как есть, не трогаем и не копируем -
-; см. подробности в LEP-CONFIG.LSP, почему это важно.
+; Правим ТОЧЕЧНО, через entget/subst/entmod, 10 конкретных DXF-групп
+; (42/43/44/45/93/174/178/295/298/342) - все остальные поля записи
+; (включая хендлы на другие объекты чертежа, группы 340/341/343)
+; остаются как есть, не трогаем и не копируем - см. подробности в
+; LEP-CONFIG.LSP, почему это важно.
+;
+; ГРУППА 342 (TextStyleHandle) - ⚠️ ПОДТВЕРЖДЕНО живым тестом
+; 2026-07-15 (и на чистом, и на боевом чертеже): это хендл текстового
+; стиля, которым рисуется контент мультивыноски. По умолчанию у
+; "Standard" смотрит на стандартный текстовый стиль AutoCAD (без
+; наклона), поэтому подписи через MLEADER рисовались БЕЗ наклона 10°/
+; шрифта ISOCPEUR, хотя весь остальной текст на чертеже - с ними
+; (LEP:CreateTextStyle выше). Значение - хендл НАШЕГО текстового
+; стиля (*LEP-TextStyle-Name*, "LEP-STYLE"), получается через
+; tblobjname (STYLE - обычная именная таблица, в отличие от самого
+; MLEADERSTYLE) - ВАЖНО вызывать LEP:CreateMLeaderStyle СТРОГО ПОСЛЕ
+; LEP:CreateTextStyle в C:LEP-SETUP, иначе стиль LEP-STYLE ещё не
+; будет существовать и tblobjname вернёт nil.
 ;
 ; Как и LEP:SetLayerNoPlot/DIMASZ выше - НЕ создаёт ничего нового
 ; (стиль "Standard" существует в любом чертеже AutoCAD "из коробки"),
@@ -258,7 +271,7 @@
 ;
 ;=====================================================================
 
-(defun LEP:CreateMLeaderStyle (/ StyleEnt StyleData)
+(defun LEP:CreateMLeaderStyle (/ StyleEnt StyleData TextStyleEnt)
 
     (setq StyleEnt
         (cdr
@@ -284,6 +297,15 @@
             (setq StyleData (subst (cons 178 *LEP-MLeader-AttachRight*)     (assoc 178 StyleData) StyleData))
             (setq StyleData (subst (cons 295 *LEP-MLeader-Underline1*)      (assoc 295 StyleData) StyleData))
             (setq StyleData (subst (cons 298 *LEP-MLeader-Underline2*)      (assoc 298 StyleData) StyleData))
+
+            ;; Группа 342 - текстовый стиль контента (см. ⚠️ выше) -
+            ;; STYLE это обычная именная таблица, tblobjname тут
+            ;; работает (в отличие от самого MLEADERSTYLE).
+            (setq TextStyleEnt (tblobjname "STYLE" *LEP-TextStyle-Name*))
+            (if TextStyleEnt
+                (setq StyleData (subst (cons 342 TextStyleEnt) (assoc 342 StyleData) StyleData))
+                (princ (strcat "\n[LEP-SETUP] ВНИМАНИЕ: текстовый стиль \"" *LEP-TextStyle-Name* "\" не найден - выноски MLEADER останутся без наклона/шрифта проекта."))
+            )
 
             (entmod StyleData)
 
