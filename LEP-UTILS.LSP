@@ -4,7 +4,9 @@
 ;
 ;   ФАЙЛ:        LEP-UTILS.LSP
 ;
-;   ВЕРСИЯ:      0.1
+;   ВЕРСИЯ:      0.2  (LEP:SetMLeaderBackgroundMask - фон под текстом
+;                выносок, Claude, 2026-07-15)
+;   0.1
 ;
 ;   НАЗНАЧЕНИЕ:
 ;
@@ -245,6 +247,55 @@
     )
 
     Result
+)
+
+
+
+;=====================================================================
+; LEP:SetMLeaderBackgroundMask
+;
+; Включает фоновую маску текста у ОДНОЙ конкретной уже созданной
+; выноски MULTILEADER (Ent - ename, обычно (entlast) сразу после
+; (command "_.MLEADER" ...)). Значения групп - *LEP-MLeader-BgColorValue*/
+; *LEP-MLeader-BgScale* в LEP-CONFIG.LSP - см. там ПОДРОБНОЕ
+; обоснование, откуда взялись, и почему это НЕ настройка стиля
+; (MLEADERSTYLE), а именно каждой отдельной выноски (⚠️ важно - если
+; кто-то захочет "сделать один раз на весь чертёж", как остальные
+; настройки MLEADER, - так не получится, у стиля нет такого поля).
+;
+; ⚠️ ПОЧЕМУ ЧЕРЕЗ РАЗБИЕНИЕ СПИСКА, А НЕ ПРОСТО assoc/subst: у сущности
+; MULTILEADER вложенная структура (CONTEXT_DATA{ -> LEADER{ ->
+; LEADER_LINE{), и коды ПОВТОРЯЮТСЯ (например (292 . 0) встречается
+; ДВАЖДЫ - наше поле фона и не связанное с ним поле глубже в LEADER{).
+; Обычный subst меняет ВСЕ вхождения с одинаковым значением - живым
+; тестом 2026-07-15 поймано, что "слепой" subst портит и то, второе,
+; чужое поле тоже. Поэтому здесь правится ТОЛЬКО "голова" списка -
+; часть ДО первого маркера (302 . "LEADER{"), где реально лежат нужные
+; нам поля (CONTEXT_DATA верхнего уровня) - хвост (сам LEADER{ со всей
+; вложенностью) не трогается вообще, коллизия невозможна по построению.
+;=====================================================================
+
+(defun LEP:SetMLeaderBackgroundMask (Ent / EData Head Tail)
+
+    (setq EData (entget Ent))
+    (setq Head nil)
+    (setq Tail EData)
+
+    ;; Собираем "голову" - всё ДО первого маркера начала вложенного
+    ;; LEADER{ - именно там, в CONTEXT_DATA верхнего уровня, лежат
+    ;; нужные нам поля фона (91/141/291/292).
+    (while (and Tail (not (equal (car Tail) (cons 302 "LEADER{"))))
+        (setq Head (cons (car Tail) Head))
+        (setq Tail (cdr Tail))
+    )
+    (setq Head (reverse Head))
+
+    (setq Head (subst (cons 291 1) (assoc 291 Head) Head))
+    (setq Head (subst (cons 292 1) (assoc 292 Head) Head))
+    (setq Head (subst (cons 91 *LEP-MLeader-BgColorValue*) (assoc 91 Head) Head))
+    (setq Head (subst (cons 141 *LEP-MLeader-BgScale*) (assoc 141 Head) Head))
+
+    (entmod (append Head Tail))
 )
 
 
