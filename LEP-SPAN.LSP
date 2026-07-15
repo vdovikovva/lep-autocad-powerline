@@ -2,7 +2,8 @@
 ;
 ;   ПРОЕКТ:      LEP
 ;   ФАЙЛ:        LEP-SPAN.LSP
-;   ВЕРСИЯ:      0.5  (LEP:PickPole не принимает откосы/чужие блоки -
+;   ВЕРСИЯ:      0.6  (LEP:CreateSpanLabel: LEADER -> MLEADER, Claude, 2026-07-15)
+;                0.5  (LEP:PickPole не принимает откосы/чужие блоки -
 ;                аудит Claude Fable, 2026-07-11)
 ;
 ;   ДОБАВЛЕНО В ЭТОЙ ВЕРСИИ:
@@ -398,11 +399,11 @@
         (strcat StatusText " " WireName ", L=" (itoa SpanLen) " м")
     )
  
-    ;; После двух точек LEADER просит 3 ответа: пусто (закончить линию),
-    ;; текст, пусто (закончить текст) - лишний "" тут уводил в подменю
-    ;; [Tolerance/Copy/Mtext/Block/None/Undo], а LabelText туда прилетал
-    ;; как невалидное ключевое слово.
-    (command "_.LEADER" MidPt TextPt "" LabelText "")
+    ;; МИГРАЦИЯ 2026-07-15: LEADER -> MLEADER (см. LEP-CONFIG.LSP,
+    ;; раздел "СТИЛЬ ВЫНОСОК MLEADER"). Вызов проще, чем у LEADER -
+    ;; просто две точки и текст, без "пусто"-ответов на промежуточные
+    ;; промпты.
+    (command "_.MLEADER" MidPt TextPt LabelText)
  
     (setvar "CLAYER" OldLayer)
 )
