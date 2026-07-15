@@ -7,15 +7,17 @@
 ;   LEP-SETUP.LSP
 ;
 ;   ВЕРСИЯ:
-;   0.5  (DIMASZ = мелкая стрелка/полка выносок - решён "отступ перед
-;        текстом", подтверждено живым тестом - Claude, 2026-07-11)
+;   0.6  (LEP:CreateMLeaderStyle - настройка стиля "Standard" MLEADER
+;        под подписи проекта, миграция с LEADER - Claude, 2026-07-15)
 ;
 ;   НАЗНАЧЕНИЕ:
 ;
 ;   Подготавливает чертёж к работе.
 ;
-;   Создаёт все необходимые слои проекта, а теперь и единый текстовый
-;   стиль (LEP:CreateTextStyle - наклонный ISOCPEUR, высота 1,3).
+;   Создаёт все необходимые слои проекта, единый текстовый стиль
+;   (LEP:CreateTextStyle - наклонный ISOCPEUR, высота 1,3) и настраивает
+;   стиль выносок MLEADER (LEP:CreateMLeaderStyle - полка/стрелка/
+;   высота текста/подчёркивание под подписи проекта).
 ;
 ;   Если слой/стиль уже существует —
 ;   повторно он не создаётся.
@@ -223,6 +225,77 @@
 
 
 ;=====================================================================
+;                       СЛУЖЕБНАЯ ФУНКЦИЯ
+;=====================================================================
+;
+; LEP:CreateMLeaderStyle
+;
+; Настраивает стиль "Standard" MLEADERSTYLE под подписи-выноски
+; проекта (полка/стрелка/высота текста/цвет/подчёркивание) - миграция
+; с классического LEADER, см. ПОДРОБНОЕ обоснование и происхождение
+; каждого значения в LEP-CONFIG.LSP, раздел "СТИЛЬ ВЫНОСОК MLEADER".
+;
+; ⚠️ MLEADERSTYLE - НЕ классическая именная таблица AutoCAD (в отличие
+; от LAYER/STYLE, которые ищутся через tblsearch/tblobjname) - это
+; объект внутри именованного словаря чертежа. Путь к нему:
+; namedobjdict -> словарь "ACAD_MLEADERSTYLE" -> запись "Standard".
+; Именно так и НИКАК иначе - tblobjname для "MLEADERSTYLE" вернёт nil
+; (уже ловили этот баг живьём: entmod падал с "bad argument type:
+; lentityp nil").
+;
+; Правим ТОЧЕЧНО, через entget/subst/entmod, только 9 конкретных
+; DXF-групп (42/43/44/45/93/174/178/295/298) - все остальные поля
+; записи (включая хендлы на другие объекты чертежа, группы
+; 340/341/342/343) остаются как есть, не трогаем и не копируем -
+; см. подробности в LEP-CONFIG.LSP, почему это важно.
+;
+; Как и LEP:SetLayerNoPlot/DIMASZ выше - НЕ создаёт ничего нового
+; (стиль "Standard" существует в любом чертеже AutoCAD "из коробки"),
+; просто перезаписывает значения при каждой загрузке чертежа. Поэтому
+; никакой проверки "уже настроено/ещё нет" не нужно - функция
+; идемпотентна сама по себе (повторный вызов просто запишет те же
+; числа заново).
+;
+;=====================================================================
+
+(defun LEP:CreateMLeaderStyle (/ StyleEnt StyleData)
+
+    (setq StyleEnt
+        (cdr
+            (assoc -1
+                (dictsearch
+                    (cdr (assoc -1 (dictsearch (namedobjdict) "ACAD_MLEADERSTYLE")))
+                    "Standard"
+                )
+            )
+        )
+    )
+
+    (if StyleEnt
+        (progn
+            (setq StyleData (entget StyleEnt))
+
+            (setq StyleData (subst (cons 43  *LEP-MLeader-LandingDistance*) (assoc 43  StyleData) StyleData))
+            (setq StyleData (subst (cons 42  *LEP-MLeader-LandingGap*)      (assoc 42  StyleData) StyleData))
+            (setq StyleData (subst (cons 44  *LEP-MLeader-ArrowSize*)       (assoc 44  StyleData) StyleData))
+            (setq StyleData (subst (cons 45  *LEP-TextHeight*)              (assoc 45  StyleData) StyleData))
+            (setq StyleData (subst (cons 93  *LEP-MLeader-TextColorValue*)  (assoc 93  StyleData) StyleData))
+            (setq StyleData (subst (cons 174 *LEP-MLeader-AttachLeft*)      (assoc 174 StyleData) StyleData))
+            (setq StyleData (subst (cons 178 *LEP-MLeader-AttachRight*)     (assoc 178 StyleData) StyleData))
+            (setq StyleData (subst (cons 295 *LEP-MLeader-Underline1*)      (assoc 295 StyleData) StyleData))
+            (setq StyleData (subst (cons 298 *LEP-MLeader-Underline2*)      (assoc 298 StyleData) StyleData))
+
+            (entmod StyleData)
+
+            (princ "\nНастроен стиль выносок MLEADER: Standard")
+        )
+        (princ "\n[LEP-SETUP] ВНИМАНИЕ: не найден стиль MLEADERSTYLE \"Standard\" - подписи-выноски будут выглядеть по умолчанию AutoCAD.")
+    )
+)
+
+
+
+;=====================================================================
 ;
 ;                     ОСНОВНАЯ КОМАНДА
 ;
@@ -358,6 +431,11 @@
     ;; подтверждено живым тестом 2026-07-11). Заодно мельчают стрелки
     ;; размерных линий пролётов - сознательно.
     (setvar "DIMASZ" *LEP-Dim-ArrowSize*)
+
+    ;; Стиль выносок MLEADER (полка/стрелка/высота текста/подчёркивание) -
+    ;; миграция подписей с LEADER на MLEADER, см. LEP:CreateMLeaderStyle
+    ;; выше и подробное обоснование в LEP-CONFIG.LSP.
+    (LEP:CreateMLeaderStyle)
 
 
 
