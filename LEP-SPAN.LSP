@@ -2,7 +2,9 @@
 ;
 ;   ПРОЕКТ:      LEP
 ;   ФАЙЛ:        LEP-SPAN.LSP
-;   ВЕРСИЯ:      0.6  (LEP:CreateSpanLabel: LEADER -> MLEADER, Claude, 2026-07-15)
+;   ВЕРСИЯ:      0.7  (LEP:CreateSpanLabel: фон под текстом выносок,
+;                Claude, 2026-07-15)
+;                0.6  (LEP:CreateSpanLabel: LEADER -> MLEADER, Claude, 2026-07-15)
 ;                0.5  (LEP:PickPole не принимает откосы/чужие блоки -
 ;                аудит Claude Fable, 2026-07-11)
 ;
@@ -404,7 +406,11 @@
     ;; просто две точки и текст, без "пусто"-ответов на промежуточные
     ;; промпты.
     (command "_.MLEADER" MidPt TextPt LabelText)
- 
+
+    ;; Фон под текстом - свойство КАЖДОЙ выноски отдельно, не стиля
+    ;; (см. LEP-CONFIG.LSP, раздел "ФОНОВАЯ МАСКА ТЕКСТА ВЫНОСОК").
+    (LEP:SetMLeaderBackgroundMask (entlast))
+
     (setvar "CLAYER" OldLayer)
 )
  

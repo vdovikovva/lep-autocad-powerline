@@ -2,7 +2,9 @@
 ;
 ;   ПРОЕКТ:      LEP
 ;   ФАЙЛ:        LEP-POLE.LSP
-;   ВЕРСИЯ:      1.0  (LEP:CreatePoleLabel: LEADER -> MLEADER, Claude, 2026-07-15)
+;   ВЕРСИЯ:      1.1  (LEP:CreatePoleLabel: фон под текстом выносок,
+;                Claude, 2026-07-15)
+;   1.0  (LEP:CreatePoleLabel: LEADER -> MLEADER, Claude, 2026-07-15)
 ;
 ;   ИСПРАВЛЕНО В ЭТОЙ ВЕРСИИ (аудит):
 ;   - Тип и статус опоры спрашиваются ДО вставки вершины в маршрут -
@@ -521,6 +523,10 @@
         (command "_.MLEADER" Point TextPoint (strcat LabelText "\\P" ClassLabel))
         (command "_.MLEADER" Point TextPoint LabelText)
     )
+
+    ;; Фон под текстом - свойство КАЖДОЙ выноски отдельно, не стиля
+    ;; (см. LEP-CONFIG.LSP, раздел "ФОНОВАЯ МАСКА ТЕКСТА ВЫНОСОК").
+    (LEP:SetMLeaderBackgroundMask (entlast))
 
     (setvar "CLAYER" OldLayer)
 )

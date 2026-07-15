@@ -7,6 +7,7 @@
 ;   LEP-ROUTE.LSP
 ;
 ;   ВЕРСИЯ:
+;   0.6  (LEP:CreateRouteLabel: фон под текстом выносок, Claude, 2026-07-15)
 ;   0.5  (LEP:CreateRouteLabel: LEADER -> MLEADER, Claude, 2026-07-15)
 ;   0.4  (обработчик ошибок: Esc при рисовании больше не оставляет
 ;   текущим служебный слой - аудит Claude Fable, 2026-07-11)
@@ -74,6 +75,10 @@
     ;; просто две точки и текст, без "пусто"-ответов на промежуточные
     ;; промпты.
     (command "_.MLEADER" Point TextPoint LabelText)
+
+    ;; Фон под текстом - свойство КАЖДОЙ выноски отдельно, не стиля
+    ;; (см. LEP-CONFIG.LSP, раздел "ФОНОВАЯ МАСКА ТЕКСТА ВЫНОСОК").
+    (LEP:SetMLeaderBackgroundMask (entlast))
 
     (setvar "CLAYER" OldLayer)
 )
