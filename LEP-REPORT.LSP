@@ -1,7 +1,9 @@
 ;=====================================================================
 ; ПРОЕКТ:       LEP (Автоматизация проектирования ЛЭП)
 ; ФАЙЛ:         LEP-REPORT.LSP
-; ВЕРСИЯ:       1.3  (метраж целым числом, локале-независимо -
+; ВЕРСИЯ:       1.4  (ЭТАП 2.5 - оборудование на существующих опорах,
+;               LEP:GetEquipLabel вынесена отдельно, Claude, 2026-07-15)
+;               1.3  (метраж целым числом, локале-независимо -
 ;               аудит Claude Fable, 2026-07-11)
 ;
 ; ПРАВКИ В ЭТОЙ ВЕРСИИ:
@@ -215,8 +217,29 @@
 ; C:LEP-REPORT - основная команда
 ;=====================================================================
 
-(defun C:LEP-REPORT ( / VL-SS PoleSS i Ent RouteID Status WireName WireLength
-                        PoleName EquipCode EquipName MasterList MergedList CsvPath CsvFile FileCheck
+;=====================================================================
+; LEP:GetEquipLabel
+;
+; Название оборудования по коду EQUIP из XDATA (РЛК/МТП-160 кВА/ЩУ/ПУ,
+; из LEP-CONFIG.LSP) - вынесено в отдельную функцию 2026-07-15, чтобы
+; не дублировать один и тот же cond в двух местах сканирования
+; (обычные опоры + ПУ на существующей опоре, см. ЭТАП 2 и ЭТАП 2.5
+; ниже в C:LEP-REPORT).
+;=====================================================================
+
+(defun LEP:GetEquipLabel (EquipCode)
+    (cond
+        ((= EquipCode "RLK") *LEP-Label-RLK*)
+        ((= EquipCode "MTP") *LEP-Label-MTP*)
+        ((= EquipCode "SCHU") *LEP-Label-SchU*)
+        ((= EquipCode "PU") *LEP-Label-PU*)
+        (t EquipCode)
+    )
+)
+
+
+(defun C:LEP-REPORT ( / VL-SS PoleSS ExistPoleSS i Ent RouteID Status WireName WireLength
+                        PoleName EquipCode EquipName EquipStatus MasterList MergedList CsvPath CsvFile FileCheck
                         RouteItem ModulesFolder)
 
     (LEP:PrintHeader "Выгрузка ведомости в CSV (только Проект.)")
@@ -299,15 +322,54 @@
                         (setq EquipCode (LEP:GetDataValue Ent "EQUIP"))
                         (if EquipCode
                             (progn
-                                (setq EquipName
-                                    (cond
-                                        ((= EquipCode "RLK") *LEP-Label-RLK*)
-                                        ((= EquipCode "MTP") *LEP-Label-MTP*)
-                                        ((= EquipCode "SCHU") *LEP-Label-SchU*)
-                                        ((= EquipCode "PU") *LEP-Label-PU*)
-                                        (t EquipCode)
-                                    )
-                                )
+                                (setq EquipName (LEP:GetEquipLabel EquipCode))
+                                (setq MasterList (LEP:AddToMasterList MasterList RouteID EquipName 1 "шт."))
+                            )
+                        )
+                    )
+                )
+                (setq i (1+ i))
+            )
+        )
+    )
+
+    ;=================================================================
+    ; ЭТАП 2.5: ОБОРУДОВАНИЕ НА СУЩЕСТВУЮЩИХ ОПОРАХ (2026-07-15)
+    ;
+    ; "ПУ на существующую опору" (LEP-END.LSP, третий пункт меню) НЕ
+    ; создаёт новую опору - оборудование просто дописывается в XDATA
+    ; УЖЕ существующей опоры (LEP:AddEquipToExistingPole, LEP-DATA.LSP),
+    ; которая стоит на СЛОЕ СУЩЕСТВУЮЩИХ опор (*LEP-Layer-Exist-Pole*),
+    ; а ЭТАП 2 выше сканирует ТОЛЬКО слой проектируемых
+    ; (*LEP-Layer-Proj-Pole*) - без этого отдельного этапа такое
+    ; оборудование вообще не попало бы в ведомость, молча.
+    ;
+    ; ⚠️ Статус самой ОПОРЫ тут НЕ проверяем (она и так Сущ., это её
+    ; естественное состояние - не выступает материалом) - проверяем
+    ; EQUIPSTATUS (статус ИМЕННО оборудования, отдельный ключ XDATA),
+    ; и саму опору как "1 шт. материала" НЕ считаем вообще - только
+    ; строку по EQUIP, в отличие от ЭТАПА 2 выше.
+    ;=================================================================
+
+    (setq ExistPoleSS (ssget "_X" (list '(0 . "INSERT") (cons 8 *LEP-Layer-Exist-Pole*))))
+
+    (if ExistPoleSS
+        (progn
+            (setq i 0)
+            (repeat (sslength ExistPoleSS)
+                (setq Ent (ssname ExistPoleSS i))
+                (setq EquipCode (LEP:GetDataValue Ent "EQUIP"))
+
+                (if EquipCode
+                    (progn
+                        (setq EquipStatus (LEP:GetDataValue Ent "EQUIPSTATUS"))
+
+                        (if (= EquipStatus "PROJECT")
+                            (progn
+                                (setq RouteID (LEP:GetDataValue Ent "ROUTE"))
+                                (if (not RouteID) (setq RouteID "БЕЗ_ТРАССЫ"))
+
+                                (setq EquipName (LEP:GetEquipLabel EquipCode))
                                 (setq MasterList (LEP:AddToMasterList MasterList RouteID EquipName 1 "шт."))
                             )
                         )
