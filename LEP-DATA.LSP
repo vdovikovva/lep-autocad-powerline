@@ -3,7 +3,9 @@
 ;
 ;   ПРОЕКТ:      LEP
 ;   ФАЙЛ:        LEP-DATA.LSP
-;   ВЕРСИЯ:      0.7  (LEP:AddEquipToExistingPole - оборудование на
+;   ВЕРСИЯ:      0.8  (LEP:ReassignRoute - массовая перепривязка опор/
+;                пролётов на другой RouteID, Claude, 2026-07-16)
+;   0.7  (LEP:AddEquipToExistingPole - оборудование на
 ;                СУЩЕСТВУЮЩЕЙ опоре, не перезаписывая её XDATA, Claude,
 ;                2026-07-15)
 ;   0.6  (LEP:AddEquipData - честный STATUS оконечного
@@ -477,5 +479,169 @@
 )
 
 
-(princ "\nLEP-DATA v0.7 загружен (номер маршрута из чертежа, честный STATUS, оборудование на сущ. опоре).")
+;=====================================================================
+;
+; LEP:ReassignPoleRoute / LEP:ReassignSpanRoute / LEP:ReassignRoute
+;
+; Массовая перепривязка объектов с ОДНОГО RouteID на ДРУГОЙ - нужно,
+; когда сама трасса когда-то осталась без ID (например, сорвался
+; LEP-ROUTE - см. известный баг с Shift+ПКМ во время PLINE, README) и
+; все опоры/пролёты, поставленные ДО ручного исправления ID трассы,
+; успели записать в СВОЮ XDATA старый, фиктивный "LEP_ROUTE_UNKNOWN" -
+; 2026-07-16, по просьбе пользователя (в ведомости так и остался
+; отдельный блок "LEP_ROUTE_UNKNOWN" даже после того, как саму трассу
+; починили вручную через LEP:AddRoute).
+;
+; ⚠️ ПОЧЕМУ ЭТО ВООБЩЕ НУЖНО - ROUTE у опоры/пролёта это НЕ живая
+; ссылка на трассу, а СНИМОК ID на момент создания объекта (строка в
+; XDATA) - почини трассу как угодно потом, уже готовые опоры/пролёты
+; сами по себе не узнают об этом, у каждого своя, отдельная копия
+; старого значения. Раньше чинили по одному объекту вручную через
+; консоль - при большом количестве это утомительно, отсюда весь этот
+; блок.
+;
+; ⚠️ ПОЧЕМУ ДВЕ РАЗНЫЕ ФУНКЦИИ (Pole/Span), А НЕ ОДНА ОБЩАЯ - у опоры
+; и у пролёта РАЗНЫЙ набор ключей XDATA (опора: TYPE/ROUTE/MODEL/
+; STATUS/LABELHANDLE[/EQUIP/EQUIPSTATUS]; пролёт: TYPE/ROUTE/STATUS/
+; WIRE/SECTION/LENGTH) - LEP:SetData ПЕРЕЗАПИСЫВАЕТ XDATA целиком (см.
+; выше), значит нужно явно перечислить и сохранить ВСЕ поля нужного
+; типа объекта, а не только ROUTE - тот же принцип, что уже применён в
+; LEP:AddEquipToExistingPole.
+;
+;=====================================================================
+
+(defun LEP:ReassignPoleRoute (Ent NewRouteID / Type Model Status LabelHandle EquipCode EquipStatus DataList)
+
+    (setq Type        (LEP:GetDataValue Ent "TYPE"))
+    (setq Model       (LEP:GetDataValue Ent "MODEL"))
+    (setq Status      (LEP:GetDataValue Ent "STATUS"))
+    (setq LabelHandle (LEP:GetDataValue Ent "LABELHANDLE"))
+    (setq EquipCode   (LEP:GetDataValue Ent "EQUIP"))
+    (setq EquipStatus (LEP:GetDataValue Ent "EQUIPSTATUS"))
+
+    (setq DataList
+        (list
+            (cons "TYPE" Type)
+            (cons "ROUTE" NewRouteID)
+            (cons "MODEL" Model)
+            (cons "STATUS" Status)
+        )
+    )
+    ;; LABELHANDLE/EQUIP/EQUIPSTATUS - НЕ у каждой опоры есть (обычная
+    ;; опора без оборудования на ней не имеет EQUIP/EQUIPSTATUS) -
+    ;; дописываем только если реально были, а не пустой строкой поверх.
+    (if LabelHandle (setq DataList (append DataList (list (cons "LABELHANDLE" LabelHandle)))))
+    (if EquipCode   (setq DataList (append DataList (list (cons "EQUIP" EquipCode)))))
+    (if EquipStatus (setq DataList (append DataList (list (cons "EQUIPSTATUS" EquipStatus)))))
+
+    (LEP:SetData Ent DataList)
+)
+
+
+(defun LEP:ReassignSpanRoute (Ent NewRouteID / Status Wire Section Length)
+
+    (setq Status  (LEP:GetDataValue Ent "STATUS"))
+    (setq Wire    (LEP:GetDataValue Ent "WIRE"))
+    (setq Section (LEP:GetDataValue Ent "SECTION"))
+    (setq Length  (LEP:GetDataValue Ent "LENGTH"))
+
+    (LEP:SetData Ent
+        (list
+            (cons "TYPE" "SPAN")
+            (cons "ROUTE" NewRouteID)
+            (cons "STATUS" Status)
+            (cons "WIRE" Wire)
+            (cons "SECTION" Section)
+            (cons "LENGTH" Length)
+        )
+    )
+)
+
+
+;=====================================================================
+;
+; LEP:ReassignRoute
+;
+; Сканирует ВСЕ слои опор (Проект.+Сущ.) и пролётов ВЛ/КЛ (Проект.+
+; Сущ.) на всём чертеже, находит объекты с XDATA ROUTE=OldRouteID и
+; перепривязывает их на NewRouteID (остальные поля каждого объекта
+; сохраняются - см. LEP:ReassignPoleRoute/SpanRoute выше).
+;
+; Вызывать из консоли вручную (не отдельная команда C:... - это редкая
+; ремонтная операция, не часть обычного рабочего процесса, не хотим
+; захламлять список команд ради неё):
+;
+;   (LEP:ReassignRoute "LEP_ROUTE_UNKNOWN" "LEP_ROUTE_01")
+;
+; Фильтр по слою через запятую в группе 8 - тот же приём, что уже
+; используется в LEP-REPORT.LSP (ЭТАП 1) для объединения ВЛ+КЛ одним
+; ssget.
+;
+;=====================================================================
+
+(defun LEP:ReassignRoute (OldRouteID NewRouteID / SS i Ent Count)
+
+    (setq Count 0)
+
+    ;; Пролёты - ВЛ+КЛ, Проект.+Сущ., одним ssget.
+    (setq SS
+        (ssget "_X"
+            (list
+                '(0 . "LWPOLYLINE")
+                (cons 8
+                    (strcat
+                        *LEP-Layer-Proj-VL* "," *LEP-Layer-Exist-VL* ","
+                        *LEP-Layer-Proj-KL* "," *LEP-Layer-Exist-KL*
+                    )
+                )
+            )
+        )
+    )
+    (if SS
+        (progn
+            (setq i 0)
+            (repeat (sslength SS)
+                (setq Ent (ssname SS i))
+                (if (= (LEP:GetDataValue Ent "ROUTE") OldRouteID)
+                    (progn
+                        (LEP:ReassignSpanRoute Ent NewRouteID)
+                        (setq Count (1+ Count))
+                    )
+                )
+                (setq i (1+ i))
+            )
+        )
+    )
+
+    ;; Опоры - Проект.+Сущ., одним ssget.
+    (setq SS
+        (ssget "_X"
+            (list
+                '(0 . "INSERT")
+                (cons 8 (strcat *LEP-Layer-Proj-Pole* "," *LEP-Layer-Exist-Pole*))
+            )
+        )
+    )
+    (if SS
+        (progn
+            (setq i 0)
+            (repeat (sslength SS)
+                (setq Ent (ssname SS i))
+                (if (= (LEP:GetDataValue Ent "ROUTE") OldRouteID)
+                    (progn
+                        (LEP:ReassignPoleRoute Ent NewRouteID)
+                        (setq Count (1+ Count))
+                    )
+                )
+                (setq i (1+ i))
+            )
+        )
+    )
+
+    (princ (strcat "\n[LEP] Перепривязано объектов с " OldRouteID " на " NewRouteID ": " (itoa Count)))
+    (princ)
+)
+
+
+(princ "\nLEP-DATA v0.8 загружен (номер маршрута из чертежа, честный STATUS, оборудование на сущ. опоре, массовая перепривязка трассы).")
 (princ)
