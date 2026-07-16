@@ -2,7 +2,10 @@
 ;
 ;   ПРОЕКТ:      LEP
 ;   ФАЙЛ:        LEP-POLE.LSP
-;   ВЕРСИЯ:      1.5  (LEP:BringToFront для подписи опоры, Claude, 2026-07-15)
+;   ВЕРСИЯ:      1.6  (эхо расстояния сразу после клика мышкой - Dynamic
+;                Input не показывает подсказку у голого getpoint,
+;                Claude, 2026-07-15)
+;   1.5  (LEP:BringToFront для подписи опоры, Claude, 2026-07-15)
 ;   1.4  (C:LEP-POLE-DELETE / C:LEP-POLE-MOVE - удаление и
 ;                перенос опоры целиком (подпись+откосы+блок), Claude,
 ;                2026-07-15)
@@ -584,10 +587,17 @@
 ;      всегда явно, никакого "запоминания направления между опорами"
 ;      больше нет.
 ;      Если Enter (не ввели число) - обычный клик мышкой, НО с базовой
-;      точкой PrevPoint - тогда AutoCAD САМ рисует резинку от предыдущей
-;      опоры до курсора и (если у пользователя включён Dynamic Input)
-;      сам показывает расстояние/угол рядом с курсором, бесплатно, без
-;      всякой дополнительной графики с нашей стороны.
+;      точкой PrevPoint - AutoCAD рисует резинку от предыдущей опоры
+;      до курсора (это безусловная фишка getpoint с базовой точкой).
+;      ⚠️ ФИКС 2026-07-15 (проверено пользователем вживую): "числовая"
+;      подсказка Dynamic Input (расстояние/угол у курсора), на которую
+;      рассчитывали раньше - НЕ появляется у голого getpoint из LISP -
+;      похоже, это фишка только штатных команд (LINE и т.п.), а не
+;      честная настройка, которую можно включить. Раз "живого" числа
+;      во время протаскивания не выходит бесплатно - показываем
+;      фактическое расстояние СРАЗУ ПОСЛЕ клика (не во время
+;      протаскивания, но хотя бы сразу видно, что получилось, без
+;      ручного замера).
 ;
 ; ⚠️ НЕ проверено вживую, что getreal гарантированно игнорирует клик
 ; мышкой (а не пытается интерпретировать его как-то ещё) - это
@@ -596,7 +606,7 @@
 ; первом реальном использовании.
 ;=====================================================================
 
-(defun LEP:PromptNextPolePoint (Route PrevPoint / DistInput RouteVerts PrevIdx)
+(defun LEP:PromptNextPolePoint (Route PrevPoint / DistInput RouteVerts PrevIdx ClickResult)
 
     (if (not PrevPoint)
 
@@ -608,18 +618,34 @@
                 (getreal "\nРасстояние от предыдущей опоры, м (+ от подписи \"Маршрут NN\", - к ней; Enter - точка мышкой): ")
             )
 
-            (cond
-                ((not DistInput)
-                 (getpoint PrevPoint "\nТочка опоры (Enter - закончить): ")
+            (if (and DistInput (= DistInput 0))
+                (princ "\n[LEP-POLE] Расстояние не может быть нулевым - укажите точку мышкой.")
+            )
+
+            (if (and DistInput (/= DistInput 0))
+
+                (progn
+                    (setq RouteVerts (LEP:GetVertices Route))
+                    (setq PrevIdx (LEP:GetNearestVertexIndex RouteVerts PrevPoint))
+                    (LEP:GetPointAtDistance RouteVerts PrevIdx (abs DistInput) (>= DistInput 0))
                 )
-                ((= DistInput 0)
-                 (princ "\n[LEP-POLE] Расстояние не может быть нулевым - укажите точку мышкой.")
-                 (getpoint PrevPoint "\nТочка опоры (Enter - закончить): ")
-                )
-                (t
-                 (setq RouteVerts (LEP:GetVertices Route))
-                 (setq PrevIdx (LEP:GetNearestVertexIndex RouteVerts PrevPoint))
-                 (LEP:GetPointAtDistance RouteVerts PrevIdx (abs DistInput) (>= DistInput 0))
+
+                (progn
+                    (setq ClickResult (getpoint PrevPoint "\nТочка опоры (Enter - закончить): "))
+
+                    ;; Расстояние СРАЗУ после клика - см. ФИКС 2026-07-15
+                    ;; в шапке функции (живая подсказка не появляется).
+                    (if ClickResult
+                        (princ
+                            (strcat
+                                "\n[LEP-POLE] Расстояние до предыдущей опоры: "
+                                (rtos (distance PrevPoint ClickResult) 2 2)
+                                " м"
+                            )
+                        )
+                    )
+
+                    ClickResult
                 )
             )
         )
