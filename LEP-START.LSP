@@ -187,6 +187,8 @@
 (princ "\n LEP-ROUTEVIS")
 (princ "\n LEP-POLE")
 (princ "\n LEP-POLE-ALONE")
+(princ "\n LEP-POLE-DELETE")
+(princ "\n LEP-POLE-MOVE")
 (princ "\n LEP-END")
 (princ "\n LEP-SPAN")
 (princ "\n LEP-SCALE")
