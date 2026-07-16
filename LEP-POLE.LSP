@@ -2,7 +2,9 @@
 ;
 ;   ПРОЕКТ:      LEP
 ;   ФАЙЛ:        LEP-POLE.LSP
-;   ВЕРСИЯ:      1.1  (LEP:CreatePoleLabel: фон под текстом выносок,
+;   ВЕРСИЯ:      1.2  (LEP:PromptNextPolePoint - расстояние от
+;                предыдущей опоры числом, Claude, 2026-07-15)
+;   1.1  (LEP:CreatePoleLabel: фон под текстом выносок,
 ;                Claude, 2026-07-15)
 ;   1.0  (LEP:CreatePoleLabel: LEADER -> MLEADER, Claude, 2026-07-15)
 ;
@@ -530,8 +532,73 @@
 
     (setvar "CLAYER" OldLayer)
 )
- 
- 
+
+
+;=====================================================================
+; LEP:PromptNextPolePoint
+;
+; Точка следующей опоры - ДВА способа получить, по просьбе
+; пользователя 2026-07-15 (раньше было только "на глаз" мышкой, потом
+; вручную двигать опоры под нужный шаг - и для Сущ. по изысканиям, и
+; для Проект. по проектной норме шага пользователь и так знает нужное
+; расстояние ДО клика):
+;
+;   1. Если PrevPoint ещё нет (это САМАЯ ПЕРВАЯ опора сессии - мерить
+;      не от чего) - обычный клик мышкой, как раньше.
+;   2. Иначе - СНАЧАЛА спрашивает расстояние ЧИСЛОМ (getreal - клик
+;      мышкой по обычному поведению AutoLISP тут просто игнорируется,
+;      ждёт клавиатуру). Если ввели положительное число - точка
+;      считается вдоль трассы через LEP:GetPointAtDistance
+;      (LEP-POLYLINE.LSP), в направлении Forward. Если Enter (не
+;      ввели число) - обычный клик мышкой, НО с базовой точкой
+;      PrevPoint - тогда AutoCAD САМ рисует резинку от предыдущей
+;      опоры до курсора и (если у пользователя включён Dynamic Input)
+;      сам показывает расстояние/угол рядом с курсором, бесплатно, без
+;      всякой дополнительной графики с нашей стороны.
+;
+; ⚠️ НЕ проверено вживую, что getreal гарантированно игнорирует клик
+; мышкой (а не пытается интерпретировать его как-то ещё) - это
+; стандартное, задокументированное поведение AutoLISP, но именно ЭТОТ
+; частный случай в этом проекте живьём не тестировался - проверить при
+; первом реальном использовании.
+;
+; Forward (T/nil) - направление вдоль трассы, определяется ОДИН РАЗ в
+; C:LEP-POLE после первой опоры (по тому, к какой вершине маршрута она
+; ближе - тот же принцип, что и ФИКС направления МТП в LEP-END.LSP),
+; сюда просто передаётся готовым.
+;=====================================================================
+
+(defun LEP:PromptNextPolePoint (Route PrevPoint Forward / DistInput RouteVerts PrevIdx)
+
+    (if (not PrevPoint)
+
+        (getpoint "\nТочка опоры (Enter - закончить): ")
+
+        (progn
+            (initget 0)
+            (setq DistInput
+                (getreal "\nРасстояние от предыдущей опоры, м (Enter - указать точку мышкой): ")
+            )
+
+            (cond
+                ((not DistInput)
+                 (getpoint PrevPoint "\nТочка опоры (Enter - закончить): ")
+                )
+                ((<= DistInput 0)
+                 (princ "\n[LEP-POLE] Расстояние должно быть положительным - укажите точку мышкой.")
+                 (getpoint PrevPoint "\nТочка опоры (Enter - закончить): ")
+                )
+                (t
+                 (setq RouteVerts (LEP:GetVertices Route))
+                 (setq PrevIdx (LEP:GetNearestVertexIndex RouteVerts PrevPoint))
+                 (LEP:GetPointAtDistance RouteVerts PrevIdx DistInput Forward)
+                )
+            )
+        )
+    )
+)
+
+
 ;=====================================================================
 ; C:LEP-POLE - основная команда
 ;
@@ -545,7 +612,7 @@
 ;; раньше не был объявлен и утекал глобальной переменной - безвредно
 ;; само по себе, но ровно этот класс неявных глобалов уже давал
 ;; трудноуловимый баг с *LEP-UseDCL*/boundp (см. LEP:GetPoleType).
-(defun C:LEP-POLE (/ Route RouteID VClass ClassLabel OldOs OldError ClickPoint InsertResult NewVertex Rotation PoleType Status PoleEnt LEP-CatchResult)
+(defun C:LEP-POLE (/ Route RouteID VClass ClassLabel OldOs OldError ClickPoint InsertResult NewVertex Rotation PoleType Status PoleEnt LEP-CatchResult PrevPoint Forward ForwardKnown RouteVerts)
  
     (setq OldError *error*)
     (defun *error* (msg)
@@ -576,9 +643,10 @@
  
             (princ "\nКликайте точки установки опор рядом с трассой.")
             (princ "\nEnter без точки - закончить.")
- 
-            (setq ClickPoint (getpoint "\nТочка опоры (Enter - закончить): "))
- 
+            (princ "\nНачиная со 2-й опоры можно ввести расстояние от предыдущей числом.")
+
+            (setq ClickPoint (LEP:PromptNextPolePoint Route PrevPoint Forward))
+
             (while ClickPoint
  
                 ;; Вся обработка одной точки обёрнута в vl-catch-all-apply:
@@ -650,6 +718,37 @@
                                             ;;    теперь настоящий - см. фикс в
                                             ;;    LEP:AddPoleData, LEP-DATA.LSP).
                                             (LEP:AddPoleData PoleEnt RouteID PoleType Status)
+
+                                            ;; 7. Запоминаем точку - от неё
+                                            ;;    будет отсчитываться расстояние
+                                            ;;    для следующей опоры (см.
+                                            ;;    LEP:PromptNextPolePoint).
+                                            ;;    Direction (Forward) - только
+                                            ;;    ОДИН РАЗ, после ПЕРВОЙ опоры:
+                                            ;;    к какой вершине маршрута она
+                                            ;;    ближе - в ТУ сторону НЕ идём,
+                                            ;;    идём от неё (тот же принцип,
+                                            ;;    что и фикс направления МТП в
+                                            ;;    LEP-END.LSP). ⚠️ Флаг
+                                            ;;    ForwardKnown ОТДЕЛЬНО от
+                                            ;;    самого Forward - Forward=nil
+                                            ;;    это ЗАКОННОЕ значение
+                                            ;;    ("назад"), не "ещё не
+                                            ;;    посчитано", иначе направление
+                                            ;;    молча пересчитывалось бы на
+                                            ;;    каждой опоре заново.
+                                            (setq PrevPoint NewVertex)
+                                            (if (not ForwardKnown)
+                                                (progn
+                                                    (setq RouteVerts (LEP:GetVertices Route))
+                                                    (setq Forward
+                                                        (< (distance PrevPoint (car RouteVerts))
+                                                           (distance PrevPoint (last RouteVerts))
+                                                        )
+                                                    )
+                                                    (setq ForwardKnown T)
+                                                )
+                                            )
                                         )
                                     )
                                 )
@@ -657,7 +756,7 @@
                         )
                      '())
                 )
- 
+
                 (if (vl-catch-all-error-p LEP-CatchResult)
                     (princ
                         (strcat
@@ -666,8 +765,8 @@
                         )
                     )
                 )
- 
-                (setq ClickPoint (getpoint "\nТочка опоры (Enter - закончить): "))
+
+                (setq ClickPoint (LEP:PromptNextPolePoint Route PrevPoint Forward))
             )
  
             (setvar "OSMODE" OldOs)
