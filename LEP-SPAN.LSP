@@ -2,7 +2,10 @@
 ;
 ;   ПРОЕКТ:      LEP
 ;   ФАЙЛ:        LEP-SPAN.LSP
-;   ВЕРСИЯ:      0.8  (комментарий LEP:CreateSpanDimension поправлен -
+;   ВЕРСИЯ:      0.9  (КЛ больше не имеет своего типа линии - убран
+;                LEP:EnsureLinetypeLoaded, КЛ рисуется CONTINUOUS как
+;                ВЛ, Claude, 2026-07-15)
+;                0.8  (комментарий LEP:CreateSpanDimension поправлен -
 ;                текст размера реально поворачивается вместе с линией
 ;                только теперь, DIMTIH/DIMTOH в LEP-SETUP.LSP -
 ;                Claude, 2026-07-15)
@@ -78,41 +81,6 @@
 
 
 
-;=====================================================================
-; LEP:EnsureLinetypeLoaded
-;
-; Проверяет, что нужный тип линии загружен в чертёж (например
-; "LEP_CABLE" для КЛ), и подгружает его из файла LtFile, если ещё не
-; загружен. LtFile ищется через findfile (Support Path/папка с
-; модулями), путь не хардкодится - см. правило проекта в CLAUDE.md.
-; "CONTINUOUS" всегда есть по умолчанию, для него ничего делать не
-; нужно.
-;=====================================================================
-
-(defun LEP:EnsureLinetypeLoaded (LtName LtFile / OldFiledia FullPath)
-    (if (and (/= LtName "CONTINUOUS") (not (tblsearch "LTYPE" LtName)))
-        (progn
-            ;; FILEDIA=1 (по умолчанию) открывает GUI-диалог выбора файла
-            ;; вместо текстового промпта на шаге "Select linetype file" -
-            ;; тогда LtFile уходит не туда и ломает очередь command.
-            (setq OldFiledia (getvar "FILEDIA"))
-            (setvar "FILEDIA" 0)
-
-            (setq FullPath (findfile LtFile))
-            (if (not FullPath)
-                (progn
-                    (princ (strcat "\n[LEP-SPAN] Не найден файл типов линий: " LtFile " - положите его в папку с модулями LEP."))
-                    (setq FullPath LtFile)
-                )
-            )
-
-            (command "_.-linetype" "_Load" LtName FullPath "")
-            (setvar "FILEDIA" OldFiledia)
-        )
-    )
-)
- 
- 
 ;=====================================================================
 ; LEP:PickPole
 ;
@@ -434,7 +402,7 @@
 ;=====================================================================
  
 (defun C:LEP-SPAN (/ Route RouteID VClass Verts P1 P2 Idx1 Idx2 SubVerts LineType WireList WireChoice
-                     LayerName LtName LtFile SpanEnt SpanLength RealLength DimDistance
+                     LayerName LtName SpanEnt SpanLength RealLength DimDistance
                      Status OldOs OldError LEP-CatchResult)
 
     (setq OldError *error*)
@@ -526,17 +494,19 @@
                                                             )
                                                             (setq LayerName *LEP-Layer-Proj-VL*)
                                                             (setq LtName "CONTINUOUS")
-                                                            (setq LtFile "")
                                                         )
                                                         (progn
+                                                            ;; КЛ рисуется ТАК ЖЕ, как ВЛ - сплошной линией,
+                                                            ;; никакого своего типа линии со штампом "K"
+                                                            ;; больше нет (убрано по просьбе пользователя
+                                                            ;; 2026-07-15 - см. LEP-README.md). Отличие КЛ
+                                                            ;; от ВЛ на чертеже - только слой/цвет
+                                                            ;; (*LEP-Layer-Proj-KL*, синий).
                                                             (setq WireList *LEP-WireTypes-KL*)
                                                             (setq LayerName *LEP-Layer-Proj-KL*)
-                                                            (setq LtName *LEP-Linetype-KL*)
-                                                            (setq LtFile *LEP-LinetypeFile-KL*)
+                                                            (setq LtName "CONTINUOUS")
                                                         )
                                                     )
-
-                                                    (LEP:EnsureLinetypeLoaded LtName LtFile)
 
                                                     ;; Марка провода/кабеля - список из CONFIG
                                                     (setq WireChoice (LEP:ChooseFromList WireList "Марка провода/кабеля"))
