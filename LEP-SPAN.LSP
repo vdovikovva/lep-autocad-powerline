@@ -2,7 +2,9 @@
 ;
 ;   ПРОЕКТ:      LEP
 ;   ФАЙЛ:        LEP-SPAN.LSP
-;   ВЕРСИЯ:      0.9  (КЛ больше не имеет своего типа линии - убран
+;   ВЕРСИЯ:      1.0  (LEP:BringToFront для подписи пролёта и размерной
+;                линии, Claude, 2026-07-15)
+;                0.9  (КЛ больше не имеет своего типа линии - убран
 ;                LEP:EnsureLinetypeLoaded, КЛ рисуется CONTINUOUS как
 ;                ВЛ, Claude, 2026-07-15)
 ;                0.8  (комментарий LEP:CreateSpanDimension поправлен -
@@ -329,6 +331,10 @@
             (setq DimText (strcat (itoa DimDistance) " м"))
 
             (command "_.DIMALIGNED" P1 P2 "_Text" DimText DimLocPt)
+
+            ;; Порядок отрисовки - наверх (по просьбе пользователя
+            ;; 2026-07-15, см. LEP:BringToFront, LEP-UTILS.LSP).
+            (LEP:BringToFront (entlast))
         )
     )
 
@@ -389,6 +395,10 @@
     ;; Фон под текстом - свойство КАЖДОЙ выноски отдельно, не стиля
     ;; (см. LEP-CONFIG.LSP, раздел "ФОНОВАЯ МАСКА ТЕКСТА ВЫНОСОК").
     (LEP:SetMLeaderBackgroundMask (entlast))
+
+    ;; Порядок отрисовки - наверх (по просьбе пользователя 2026-07-15,
+    ;; см. LEP:BringToFront, LEP-UTILS.LSP).
+    (LEP:BringToFront (entlast))
 
     (setvar "CLAYER" OldLayer)
 )

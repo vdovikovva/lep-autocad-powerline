@@ -2,7 +2,8 @@
 ;
 ;   ПРОЕКТ:      LEP
 ;   ФАЙЛ:        LEP-POLE.LSP
-;   ВЕРСИЯ:      1.4  (C:LEP-POLE-DELETE / C:LEP-POLE-MOVE - удаление и
+;   ВЕРСИЯ:      1.5  (LEP:BringToFront для подписи опоры, Claude, 2026-07-15)
+;   1.4  (C:LEP-POLE-DELETE / C:LEP-POLE-MOVE - удаление и
 ;                перенос опоры целиком (подпись+откосы+блок), Claude,
 ;                2026-07-15)
 ;   1.3  (LEP:PromptNextPolePoint - направление числа
@@ -537,6 +538,10 @@
     ;; Фон под текстом - свойство КАЖДОЙ выноски отдельно, не стиля
     ;; (см. LEP-CONFIG.LSP, раздел "ФОНОВАЯ МАСКА ТЕКСТА ВЫНОСОК").
     (LEP:SetMLeaderBackgroundMask LabelEnt)
+
+    ;; Порядок отрисовки - наверх (по просьбе пользователя 2026-07-15,
+    ;; см. LEP:BringToFront, LEP-UTILS.LSP).
+    (LEP:BringToFront LabelEnt)
 
     (setvar "CLAYER" OldLayer)
 
