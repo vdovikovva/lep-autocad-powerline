@@ -7,6 +7,8 @@
 ;   LEP-SETUP.LSP
 ;
 ;   ВЕРСИЯ:
+;   0.8  (DIMSAH/DIMBLK1/DIMBLK2/DIMLDRBLK - стрелка "Oblique" -
+;        Claude, 2026-07-15)
 ;   0.7  (DIMTIH/DIMTOH/DIMTAD - текст размерной линии пролёта
 ;        поворачивается вместе с линией и садится над ней - Claude,
 ;        2026-07-15)
@@ -465,6 +467,16 @@
     (setvar "DIMTIH" *LEP-Dim-TextInsideHorizontal*)
     (setvar "DIMTOH" *LEP-Dim-TextOutsideHorizontal*)
     (setvar "DIMTAD" *LEP-Dim-TextAbove*)
+
+    ;; Форма стрелки - "Oblique" (косая черта) вместо дефолтной
+    ;; закрашенной стрелки, для First/Second/Leader сразу (диалог
+    ;; "Symbols and Arrows") - см. *LEP-Dim-ArrowBlock* в LEP-CONFIG.LSP.
+    ;; DIMSAH=1 нужен, чтобы DIMBLK1/DIMBLK2 вообще учитывались (иначе
+    ;; работал бы только общий DIMBLK).
+    (setvar "DIMSAH" 1)
+    (setvar "DIMBLK1" *LEP-Dim-ArrowBlock*)
+    (setvar "DIMBLK2" *LEP-Dim-ArrowBlock*)
+    (setvar "DIMLDRBLK" *LEP-Dim-ArrowBlock*)
 
     ;; Стиль выносок MLEADER (полка/стрелка/высота текста/подчёркивание) -
     ;; миграция подписей с LEADER на MLEADER, см. LEP:CreateMLeaderStyle
