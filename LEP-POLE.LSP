@@ -2,7 +2,10 @@
 ;
 ;   ПРОЕКТ:      LEP
 ;   ФАЙЛ:        LEP-POLE.LSP
-;   ВЕРСИЯ:      1.3  (LEP:PromptNextPolePoint - направление числа
+;   ВЕРСИЯ:      1.4  (C:LEP-POLE-DELETE / C:LEP-POLE-MOVE - удаление и
+;                перенос опоры целиком (подпись+откосы+блок), Claude,
+;                2026-07-15)
+;   1.3  (LEP:PromptNextPolePoint - направление числа
 ;                через знак вместо угадывания по первой опоре, Claude,
 ;                2026-07-15)
 ;   1.2  (LEP:PromptNextPolePoint - расстояние от
@@ -795,8 +798,194 @@
     (LEP:PrintFooter)
     (princ)
 )
- 
- 
+
+
+;=====================================================================
+; LEP:DeletePoleGroup
+;
+; Полностью убирает опору - подпись + откосы (если есть) + сама
+; главная трапеция. Нужна и для C:LEP-POLE-DELETE, и для
+; C:LEP-POLE-MOVE (перенос = удалить старую этой функцией + вставить
+; новую через LEP:PlacePoleOnRoute).
+;
+; ⚠️ Найдено пользователем 2026-07-15: (entdel) на блоке опоры НЕ
+; трогает её подпись (отдельный объект MLEADER, никакой связи между
+; ними в AutoCAD нет) - подтверждено живым тестом, подпись остаётся
+; висеть в воздухе, указывая на пустое место. Поэтому подпись убираем
+; ОТДЕЛЬНО, по хендлу, сохранённому в XDATA опоры при вставке (см.
+; LEP:AddPoleData, LEP-DATA.LSP).
+;
+; Откосы (у анкерных/угловых опор, 2/3 столба) - НЕ имеют своей XDATA
+; вообще (см. LEP:InsertPoleGroup, LEP-POLESYM.LSP - данные пишутся
+; только на главную трапецию) - это и есть надёжный признак "это
+; откос, не отдельная опора", а не хрупкая близость к главной. Ищем
+; блоки *LEP-Block-Pole* в окне вокруг главной трапеции (с запасом
+; поверх *LEP-Pole-Sym-Offset*) и убираем те, у которых XDATA нет.
+;
+; ⚠️ Вершину трассы, к которой была привязана опора, НЕ трогаем -
+; она на служебном скрытом слое, не печатается, в ведомость не
+; попадает - безвредный технический "хвостик". Гоняться за её
+; удалением опаснее (риск случайно задеть чужую вершину - от соседней
+; опоры или родного излома маршрута), чем оставить как есть.
+;=====================================================================
+
+(defun LEP:DeletePoleGroup (PoleEnt / PolePt LabelHandle LabelEnt Radius Corner1 Corner2 SS i Ent)
+
+    (setq PolePt (cdr (assoc 10 (entget PoleEnt))))
+
+    ;; Подпись - по хендлу из XDATA.
+    (setq LabelHandle (LEP:GetDataValue PoleEnt "LABELHANDLE"))
+    (if LabelHandle
+        (progn
+            (setq LabelEnt (handent LabelHandle))
+            (if LabelEnt (entdel LabelEnt))
+        )
+    )
+
+    ;; Откосы - блоки того же имени, БЕЗ XDATA, в окне вокруг опоры.
+    (setq Radius (* *LEP-Pole-Sym-Offset* 1.5))
+    (setq Corner1 (list (- (car PolePt) Radius) (- (cadr PolePt) Radius)))
+    (setq Corner2 (list (+ (car PolePt) Radius) (+ (cadr PolePt) Radius)))
+
+    (setq SS (ssget "_C" Corner1 Corner2 (list (cons 0 "INSERT") (cons 2 *LEP-Block-Pole*))))
+    (if SS
+        (progn
+            (setq i 0)
+            (repeat (sslength SS)
+                (setq Ent (ssname SS i))
+                (if (and (/= Ent PoleEnt) (not (LEP:GetDataValue Ent "TYPE")))
+                    (entdel Ent)
+                )
+                (setq i (1+ i))
+            )
+        )
+    )
+
+    ;; Сама главная трапеция - последней.
+    (entdel PoleEnt)
+)
+
+
+;=====================================================================
+; C:LEP-POLE-DELETE
+;
+; Удаляет опору целиком (подпись + откосы + блок) - клик по ГЛАВНОЙ
+; трапеции опоры. Добавлено 2026-07-15 по прямой просьбе пользователя:
+; раньше единственный способ убрать неправильно поставленную опору -
+; вручную стереть блок мышкой, оставляя висящую подпись (и откосы у
+; анкерных/угловых опор) мусором на чертеже.
+;=====================================================================
+
+(defun C:LEP-POLE-DELETE (/ PickResult Ent OldError)
+
+    (setq OldError *error*)
+    (defun *error* (msg)
+        (setq *error* OldError)
+        (princ (strcat "\nКоманда прервана: " msg))
+        (princ)
+    )
+
+    (LEP:PrintHeader "Удаление опоры (с подписью и откосами)")
+
+    (setq PickResult (entsel "\nКликните по опоре для удаления: "))
+
+    (if PickResult
+        (progn
+            (setq Ent (car PickResult))
+            (if (and (= (cdr (assoc 0 (entget Ent))) "INSERT")
+                     (= (LEP:GetDataValue Ent "TYPE") "POLE")
+                )
+                (progn
+                    (LEP:DeletePoleGroup Ent)
+                    (princ "\n[LEP-POLE-DELETE] Опора, подпись и откосы (если были) удалены.")
+                )
+                (princ "\n[LEP-POLE-DELETE] Это не опора (возможно, откос или посторонний блок) - кликните по ГЛАВНОЙ трапеции опоры.")
+            )
+        )
+        (princ "\n[LEP-POLE-DELETE] Отменено.")
+    )
+
+    (setq *error* OldError)
+    (LEP:PrintFooter)
+    (princ)
+)
+
+
+;=====================================================================
+; C:LEP-POLE-MOVE
+;
+; Переносит опору на новую точку - удаляет старую (подпись+откосы+
+; блок, LEP:DeletePoleGroup) и вставляет новую тем же способом, что и
+; обычная расстановка (LEP:PlacePoleOnRoute), с ТЕМИ ЖЕ типом/статусом,
+; прочитанными из XDATA старой опоры ДО удаления - переспрашивать не
+; нужно. Добавлено 2026-07-15 по просьбе пользователя - альтернатива
+; ручному перетаскиванию блока мышкой, при котором пролёт (LEP-SPAN,
+; уже построенный из вершин трассы, а не из положения блоков) мог
+; остаться привязан к СТАРОЙ, неверной геометрии, если GEOMCONSTRAINT
+; почему-то не удержал связь опоры с трассой (см. историю в README).
+;
+; ⚠️ Если вставка на новом месте всё же не удастся (редкий случай) -
+; старая опора к этому моменту уже удалена, отдельное предупреждение
+; в консоль - ставьте новую вручную командой LEP-POLE.
+;=====================================================================
+
+(defun C:LEP-POLE-MOVE (/ Route Ent RouteID PoleType Status ClassLabel VClass NewPoint NewPoleEnt OldError)
+
+    (setq OldError *error*)
+    (defun *error* (msg)
+        (setq *error* OldError)
+        (princ (strcat "\nКоманда прервана: " msg))
+        (princ)
+    )
+
+    (LEP:PrintHeader "Перенос опоры")
+
+    (setq Route (car (entsel "\nВыберите полилинию маршрута (если не видна - включите LEP-ROUTEVIS): ")))
+
+    (if Route
+        (progn
+            (setq Ent (car (entsel "\nКликните по опоре, которую нужно передвинуть: ")))
+
+            (if (and Ent
+                     (= (cdr (assoc 0 (entget Ent))) "INSERT")
+                     (= (LEP:GetDataValue Ent "TYPE") "POLE")
+                )
+                (progn
+                    ;; Читаем старые данные ДО удаления - тип/статус
+                    ;; переносятся на новую опору без переспроса.
+                    (setq RouteID (LEP:GetDataValue Ent "ROUTE"))
+                    (setq PoleType (LEP:GetDataValue Ent "MODEL"))
+                    (setq Status (LEP:GetDataValue Ent "STATUS"))
+
+                    (setq VClass (LEP:GetDataValue Route "VCLASS"))
+                    (setq ClassLabel (cdr (assoc VClass *LEP-VoltageClassLabel*)))
+
+                    (setq NewPoint (getpoint "\nНовая точка для опоры: "))
+
+                    (if NewPoint
+                        (progn
+                            (LEP:DeletePoleGroup Ent)
+                            (setq NewPoleEnt (LEP:PlacePoleOnRoute Route RouteID ClassLabel NewPoint PoleType Status))
+                            (if NewPoleEnt
+                                (princ "\n[LEP-POLE-MOVE] Опора перенесена.")
+                                (princ "\n[LEP-POLE-MOVE] Не удалось вставить опору на новом месте - старая уже удалена, поставьте новую вручную командой LEP-POLE.")
+                            )
+                        )
+                        (princ "\n[LEP-POLE-MOVE] Точка не указана - старая опора НЕ тронута, отменено.")
+                    )
+                )
+                (princ "\n[LEP-POLE-MOVE] Это не опора (возможно, откос или посторонний блок) - кликните по ГЛАВНОЙ трапеции опоры.")
+            )
+        )
+        (princ "\nМаршрут не выбран.")
+    )
+
+    (setq *error* OldError)
+    (LEP:PrintFooter)
+    (princ)
+)
+
+
 ;=====================================================================
 ; LEP:FindNearestRoute
 ;
