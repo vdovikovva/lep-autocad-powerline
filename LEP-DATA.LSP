@@ -3,7 +3,10 @@
 ;
 ;   ПРОЕКТ:      LEP
 ;   ФАЙЛ:        LEP-DATA.LSP
-;   ВЕРСИЯ:      0.6  (LEP:AddEquipData - честный STATUS оконечного
+;   ВЕРСИЯ:      0.7  (LEP:AddEquipToExistingPole - оборудование на
+;                СУЩЕСТВУЮЩЕЙ опоре, не перезаписывая её XDATA, Claude,
+;                2026-07-15)
+;   0.6  (LEP:AddEquipData - честный STATUS оконечного
 ;                оборудования, Claude, 2026-07-15)
 ;   0.5  (номер маршрута из чертежа + честный STATUS опоры
 ;                - аудит Claude Fable, 2026-07-11)
@@ -421,5 +424,58 @@
 )
 
 
-(princ "\nLEP-DATA v0.5 загружен (номер маршрута из чертежа, честный STATUS).")
+;=====================================================================
+;
+; LEP:AddEquipToExistingPole
+;
+; Добавляет оборудование (например ПУ) на УЖЕ СУЩЕСТВУЮЩУЮ опору -
+; 2026-07-15, по просьбе пользователя ("не плодить новую опору ради
+; ПУ, если подключение реально идёт к уже стоящей"). Опора при этом
+; остаётся ровно тем, чем была (та же трапеция, тот же статус Сущ.) -
+; НЕ через LEP:AddEquipData, которая полностью ПЕРЕЗАПИСЫВАЕТ XDATA
+; объекта (см. LEP:SetData выше - пишет ЦЕЛИКОМ новый набор ключей,
+; ничего старого не сохраняя). Если бы вызвали LEP:AddEquipData на
+; существующей опоре - она потеряла бы свой LABELHANDLE (нечем было бы
+; найти её подпись для LEP-POLE-DELETE/MOVE) и, что хуже, получила бы
+; STATUS того оборудования, которое добавляем (обычно "PROJECT") -
+; опора визуально осталась бы Сущ. (слой не меняется), но ЛГАЛА бы в
+; XDATA, что она новая - тот же класс ошибки, что когда-то ловили и
+; чинили в LEP:AddPoleData.
+;
+; Поэтому здесь - читаем ВСЕ существующие поля опоры и переписываем их
+; же обратно, ДОБАВИВ EQUIP и EQUIPSTATUS (статус именно ОБОРУДОВАНИЯ,
+; отдельно от статуса самой опоры - опора Сущ., а ПУ на ней - Проект.,
+; это НЕ противоречие, а как раз тот самый случай, ради которого вся
+; эта функция).
+;
+; ⚠️ LEP-REPORT.LSP должен знать про EQUIPSTATUS отдельно от STATUS -
+; см. отдельный скан слоя существующих опор там же.
+;
+;=====================================================================
+
+(defun LEP:AddEquipToExistingPole (PoleEnt EquipCode EquipStatus / Type Route Model Status LabelHandle)
+
+    (setq Type        (LEP:GetDataValue PoleEnt "TYPE"))
+    (setq Route       (LEP:GetDataValue PoleEnt "ROUTE"))
+    (setq Model       (LEP:GetDataValue PoleEnt "MODEL"))
+    (setq Status      (LEP:GetDataValue PoleEnt "STATUS"))
+    (setq LabelHandle (LEP:GetDataValue PoleEnt "LABELHANDLE"))
+
+    (LEP:SetData
+        PoleEnt
+        (list
+            (cons "TYPE" Type)
+            (cons "ROUTE" Route)
+            (cons "MODEL" Model)
+            (cons "STATUS" Status)
+            (cons "LABELHANDLE" LabelHandle)
+            (cons "EQUIP" EquipCode)
+            (cons "EQUIPSTATUS" EquipStatus)
+        )
+    )
+
+)
+
+
+(princ "\nLEP-DATA v0.7 загружен (номер маршрута из чертежа, честный STATUS, оборудование на сущ. опоре).")
 (princ)
