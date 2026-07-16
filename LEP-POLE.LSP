@@ -502,7 +502,7 @@
 ; друг на друга (замечено пользователем на реальном тесте).
 ;=====================================================================
 
-(defun LEP:CreatePoleLabel (Point PoleType Status ClassLabel OffsetAngle / StatusText LabelText TextPoint OldLayer)
+(defun LEP:CreatePoleLabel (Point PoleType Status ClassLabel OffsetAngle / StatusText LabelText TextPoint OldLayer LabelEnt)
 
     (setq OldLayer (getvar "CLAYER"))
     (LEP:SetCurrentLayer *LEP-Layer-Text*)
@@ -529,11 +529,22 @@
         (command "_.MLEADER" Point TextPoint LabelText)
     )
 
+    (setq LabelEnt (entlast))
+
     ;; Фон под текстом - свойство КАЖДОЙ выноски отдельно, не стиля
     ;; (см. LEP-CONFIG.LSP, раздел "ФОНОВАЯ МАСКА ТЕКСТА ВЫНОСОК").
-    (LEP:SetMLeaderBackgroundMask (entlast))
+    (LEP:SetMLeaderBackgroundMask LabelEnt)
 
     (setvar "CLAYER" OldLayer)
+
+    ;; ⚠️ ДОБАВЛЕНО 2026-07-15: возвращаем ename созданной подписи -
+    ;; нужно для LEP:AddPoleData (хранит хендл подписи в XDATA опоры,
+    ;; см. LEP-DATA.LSP) - LEP-POLE-DELETE/LEP-POLE-MOVE не могли бы
+    ;; иначе найти и убрать подпись при удалении/переносе опоры (это
+    ;; отдельный, никак не связанный с блоком опоры объект). Раньше
+    ;; возвращалось то, что вернёт setvar (OldLayer) - никем не
+    ;; использовалось, ломать было нечего.
+    LabelEnt
 )
 
 
@@ -605,6 +616,64 @@
             )
         )
     )
+)
+
+
+;=====================================================================
+; LEP:PlacePoleOnRoute
+;
+; Общая логика вставки ОДНОЙ опоры на трассу - выделена 2026-07-15 из
+; C:LEP-POLE (была только там), чтобы её же мог использовать
+; C:LEP-POLE-MOVE (перенос = удалить старую + вставить новую этой же
+; функцией на новом месте, без дублирования кода в двух местах):
+; проекция клика на трассу -> новая вершина -> блок опоры -> привязка
+; GEOMCONSTRAINT -> подпись -> данные для ведомости (включая хендл
+; подписи - см. LEP:AddPoleData, LEP-DATA.LSP).
+;
+; Возвращает ename ГЛАВНОЙ трапеции опоры, либо nil, если вставка не
+; удалась (LEP:InsertPole сама решает, когда это происходит).
+;=====================================================================
+
+(defun LEP:PlacePoleOnRoute (Route RouteID ClassLabel ClickPoint PoleType Status / InsertResult NewVertex Rotation PoleEnt LabelEnt)
+
+    ;; Находим ближайшую точку на линии и вставляем туда новую вершину
+    ;; полилинии. Заодно получаем концы отрезка маршрута под ней -
+    ;; нужны для разворота символа опоры по направлению трассы.
+    (setq InsertResult (LEP:InsertVertexOnRoute Route ClickPoint))
+    (setq NewVertex (car InsertResult))
+    (setq Rotation (LEP:GetPoleRotation (cadr InsertResult) (caddr InsertResult)))
+
+    ;; Вставляем символ опоры (1/2/3 трапеции по типу) в новую вершину.
+    (setq PoleEnt (LEP:InsertPole NewVertex Rotation PoleType Status))
+
+    (if PoleEnt
+        (progn
+            ;; Привязываем ГЛАВНУЮ трапецию к вершине маршрута (откосы,
+            ;; если есть, не привязаны - чисто визуальная деталь).
+            (command "_.GEOMCONSTRAINT" "_COincident" PoleEnt NewVertex Route NewVertex "")
+
+            ;; ⚠️ Страховка (2026-07-10): если GEOMCONSTRAINT всё же не
+            ;; смог наложить связь (диалог "Geometric Constraints" в
+            ;; AutoCAD) - команда сама по себе НЕ завершается, а
+            ;; остаётся ждать повторного выбора объекта ("Press OK to
+            ;; reselect..."). Пустой (command) - это Escape в AutoLISP,
+            ;; гарантированно закрывает любую всё ещё активную команду,
+            ;; чтобы один неудачный констрейнт не портил остальное (см.
+            ;; переписку с пользователем про "Select object:
+            ;; _.GEOMCONSTRAINT").
+            (command)
+
+            ;; Подпись-выноска (2 строки) - хендл возвращается функцией
+            ;; и уходит в XDATA опоры (см. LEP:AddPoleData).
+            (setq LabelEnt (LEP:CreatePoleLabel NewVertex PoleType Status ClassLabel *LEP-Label-Angle-Default*))
+
+            ;; Данные для ведомости + хендл подписи (для
+            ;; LEP-POLE-DELETE/LEP-POLE-MOVE).
+            (LEP:AddPoleData PoleEnt RouteID PoleType Status LabelEnt)
+        )
+    )
+
+    PoleEnt
 )
 
 
@@ -683,61 +752,21 @@
                                 (progn
                                     (setq Status (LEP:GetPoleStatus))
 
-                                    ;; 2. Находим ближайшую точку на линии и
-                                    ;;    вставляем туда новую вершину полилинии.
-                                    ;;    Заодно получаем концы отрезка маршрута
-                                    ;;    под ней - нужны для разворота символа
-                                    ;;    опоры по направлению трассы.
-                                    (setq InsertResult (LEP:InsertVertexOnRoute Route ClickPoint))
-                                    (setq NewVertex (car InsertResult))
-                                    (setq Rotation (LEP:GetPoleRotation (cadr InsertResult) (caddr InsertResult)))
+                                    ;; 2-6. Вся геометрия+констрейнт+подпись+
+                                    ;;      данные - общая функция (см. её
+                                    ;;      шапку выше), используется и в
+                                    ;;      C:LEP-POLE-MOVE.
+                                    (setq PoleEnt (LEP:PlacePoleOnRoute Route RouteID ClassLabel ClickPoint PoleType Status))
 
-                                    ;; 3. Вставляем символ опоры (1/2/3
-                                    ;;    трапеции по типу) в новую вершину.
-                                    (setq PoleEnt (LEP:InsertPole NewVertex Rotation PoleType Status))
-
+                                    ;; 7. Запоминаем точку - от неё будет
+                                    ;;    отсчитываться расстояние для
+                                    ;;    следующей опоры (знаком числа -
+                                    ;;    см. ФИКС 2026-07-15 в шапке
+                                    ;;    LEP:PromptNextPolePoint; направление
+                                    ;;    больше НЕ запоминается между
+                                    ;;    опорами - задаётся явно каждый раз).
                                     (if PoleEnt
-                                        (progn
-                                            ;; 4. Привязываем ГЛАВНУЮ трапецию
-                                            ;;    к вершине маршрута (откосы,
-                                            ;;    если есть, не привязаны -
-                                            ;;    чисто визуальная деталь).
-                                            (command "_.GEOMCONSTRAINT" "_COincident" PoleEnt NewVertex Route NewVertex "")
-
-                                            ;; ⚠️ Страховка (2026-07-10): если
-                                            ;; GEOMCONSTRAINT всё же не смог
-                                            ;; наложить связь (диалог "Geometric
-                                            ;; Constraints" в AutoCAD) - команда
-                                            ;; сама по себе НЕ завершается, а
-                                            ;; остаётся ждать повторного выбора
-                                            ;; объекта ("Press OK to reselect...").
-                                            ;; Пустой (command) - это Escape в
-                                            ;; AutoLISP, гарантированно закрывает
-                                            ;; любую всё ещё активную команду,
-                                            ;; чтобы один неудачный констрейнт не
-                                            ;; портил весь остальной цикл (см.
-                                            ;; переписку с пользователем про
-                                            ;; "Select object: _.GEOMCONSTRAINT").
-                                            (command)
-
-                                            ;; 5. Подпись-выноска (2 строки).
-                                            (LEP:CreatePoleLabel NewVertex PoleType Status ClassLabel *LEP-Label-Angle-Default*)
-
-                                            ;; 6. Данные для ведомости (Status
-                                            ;;    теперь настоящий - см. фикс в
-                                            ;;    LEP:AddPoleData, LEP-DATA.LSP).
-                                            (LEP:AddPoleData PoleEnt RouteID PoleType Status)
-
-                                            ;; 7. Запоминаем точку - от неё
-                                            ;;    будет отсчитываться расстояние
-                                            ;;    для следующей опоры (знаком
-                                            ;;    числа - см. ФИКС 2026-07-15
-                                            ;;    в шапке LEP:PromptNextPolePoint;
-                                            ;;    направление больше НЕ
-                                            ;;    запоминается между опорами -
-                                            ;;    задаётся явно каждый раз).
-                                            (setq PrevPoint NewVertex)
-                                        )
+                                        (setq PrevPoint (cdr (assoc 10 (entget PoleEnt))))
                                     )
                                 )
                             )
@@ -862,7 +891,7 @@
 ; Enter без точки - выход из цикла.
 ;=====================================================================
 
-(defun C:LEP-POLE-ALONE (/ ClickPoint PoleType Status PoleEnt RouteID VClass ClassLabel RouteFound OldError LEP-CatchResult)
+(defun C:LEP-POLE-ALONE (/ ClickPoint PoleType Status PoleEnt RouteID VClass ClassLabel RouteFound OldError LEP-CatchResult LabelEnt)
 
     (setq OldError *error*)
     (defun *error* (msg)
@@ -925,10 +954,11 @@
 
                             (if PoleEnt
                                 (progn
-                                    (LEP:CreatePoleLabel ClickPoint PoleType Status ClassLabel *LEP-Label-Angle-Default*)
+                                    (setq LabelEnt (LEP:CreatePoleLabel ClickPoint PoleType Status ClassLabel *LEP-Label-Angle-Default*))
                                     ;; Status теперь настоящий - см. фикс в
-                                    ;; LEP:AddPoleData (LEP-DATA.LSP).
-                                    (LEP:AddPoleData PoleEnt RouteID PoleType Status)
+                                    ;; LEP:AddPoleData (LEP-DATA.LSP). LabelEnt -
+                                    ;; хендл подписи в XDATA, см. ФИКС 2026-07-15.
+                                    (LEP:AddPoleData PoleEnt RouteID PoleType Status LabelEnt)
                                 )
                             )
                         )
