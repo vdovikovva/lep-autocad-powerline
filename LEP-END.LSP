@@ -2,7 +2,9 @@
 ;
 ;   ПРОЕКТ:      LEP
 ;   ФАЙЛ:        LEP-END.LSP
-;   ВЕРСИЯ:      0.6  (третий пункт "ПУ на существующую опору" - без
+;   ВЕРСИЯ:      0.7  (выбор мощности МТП - *LEP-MTP-Types*, Claude,
+;                2026-07-16)
+;   0.6  (третий пункт "ПУ на существующую опору" - без
 ;                новой геометрии, дописывает строку в готовую подпись,
 ;                Claude, 2026-07-15)
 ;   0.5  (статус Сущ./Проект. для оконечного оборудования +
@@ -111,7 +113,7 @@
 
 (defun C:LEP-END (/ Route RouteID Choice EndType Status ClickPoint InsertResult
                     Pt1 Pt2 Pt3 Rotation RouteDir RouteVerts Ent1 Ent2 Ent3 OldOs OldError
-                    ExistPoleEnt LabelHandle LabelEnt)
+                    ExistPoleEnt LabelHandle LabelEnt MtpChoice MtpLabel)
 
     (setq OldError *error*)
     (defun *error* (msg)
@@ -212,6 +214,18 @@
                             ;; оконечное оборудование тоже бывает.
                             (setq Status (LEP:GetStatus "оконечного оборудования"))
 
+                            ;; ⚠️ ДОБАВЛЕНО 2026-07-16: выбор мощности МТП -
+                            ;; только для МТП, ПУ такого выбора не требует.
+                            ;; Enter (отмена выбора) - используем значение по
+                            ;; умолчанию (*LEP-Label-MTP*), не обрываем всю
+                            ;; постановку МТП из-за пропущенного уточнения.
+                            (if (= EndType "MTP")
+                                (progn
+                                    (setq MtpChoice (LEP:ChooseFromList *LEP-MTP-Types* "Тип МТП (мощность/ВН/НН)"))
+                                    (setq MtpLabel (if MtpChoice (cdr MtpChoice) *LEP-Label-MTP*))
+                                )
+                            )
+
                             (setq ClickPoint (getpoint "\nТочка установки (рядом с концом трассы): "))
 
                             (if ClickPoint
@@ -283,8 +297,13 @@
                                                 )
                                             )
                                             (setq Ent2 (LEP:InsertPole Pt2 Rotation *LEP-End-PoleType* Status))
-                                            (LEP:CreatePoleLabel Pt2 *LEP-End-PoleType* Status *LEP-Label-MTP* *LEP-End-LabelAngle-MTP*)
-                                            (LEP:AddEquipData Ent2 RouteID *LEP-End-PoleType* "MTP" Status)
+                                            ;; MtpLabel - выбранная мощность (2026-07-16), не
+                                            ;; общий фиксированный *LEP-Label-MTP* - записывается
+                                            ;; целиком как EQUIP, чтобы разные МТП по мощности не
+                                            ;; слились в одну строку в ведомости (см. LEP-CONFIG.LSP,
+                                            ;; *LEP-MTP-Types*, и LEP:GetEquipLabel в LEP-REPORT.LSP).
+                                            (LEP:CreatePoleLabel Pt2 *LEP-End-PoleType* Status MtpLabel *LEP-End-LabelAngle-MTP*)
+                                            (LEP:AddEquipData Ent2 RouteID *LEP-End-PoleType* MtpLabel Status)
 
                                             ;; Опора 3 (ЩУ) - ещё дальше по маршруту на
                                             ;; *LEP-End-MTP-Spacing2* м от опоры 2.
