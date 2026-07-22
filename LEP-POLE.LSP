@@ -2,7 +2,11 @@
 ;
 ;   ПРОЕКТ:      LEP
 ;   ФАЙЛ:        LEP-POLE.LSP
-;   ВЕРСИЯ:      1.6  (эхо расстояния сразу после клика мышкой - Dynamic
+;   ВЕРСИЯ:      1.7  (LEP:InsertPole/PlacePoleOnRoute получили параметр
+;                VClass - слой опоры теперь зависит от класса
+;                напряжения маршрута, не только от статуса (4 granular
+;                слоя вместо 2, см. LEP-CONFIG.LSP) - Claude, 2026-07-22)
+;   1.6  (эхо расстояния сразу после клика мышкой - Dynamic
 ;                Input не показывает подсказку у голого getpoint,
 ;                Claude, 2026-07-15)
 ;   1.5  (LEP:BringToFront для подписи опоры, Claude, 2026-07-15)
@@ -453,13 +457,26 @@
 ; LEP:SetBlockAttribute больше не нужны и убраны отсюда целиком.
 ;=====================================================================
 
-(defun LEP:InsertPole (Point Rotation PoleType Status / OldLayer Ent TargetLayer)
+;; ⚠️ ФИКС 2026-07-22 (по просьбе пользователя - цвет опоры зависит от
+;; класса напряжения, не только от статуса): добавлен параметр VClass
+;; ("10"/"04", см. *LEP-VoltageClasses* в CONFIG) - выбирает ОДИН из
+;; ЧЕТЫРЁХ granular слоёв опор вместо одного из двух. VClass может быть
+;; nil (например LEP-POLE-ALONE на чертеже без единой трассы, привязать
+;; не к чему) - в этом случае используется 10кВ как безопасный дефолт
+;; (тот же слой, что был единственным ДО этой правки).
+(defun LEP:InsertPole (Point Rotation PoleType Status VClass / OldLayer Ent TargetLayer)
 
     (setq OldLayer (getvar "CLAYER"))
 
     (if (= Status "EXIST")
-        (setq TargetLayer *LEP-Layer-Exist-Pole*)
-        (setq TargetLayer *LEP-Layer-Proj-Pole*)
+        (if (= VClass "04")
+            (setq TargetLayer *LEP-Layer-Exist-Pole-04*)
+            (setq TargetLayer *LEP-Layer-Exist-Pole-10*)
+        )
+        (if (= VClass "04")
+            (setq TargetLayer *LEP-Layer-Proj-Pole-04*)
+            (setq TargetLayer *LEP-Layer-Proj-Pole-10*)
+        )
     )
     (LEP:SetCurrentLayer TargetLayer)
 
@@ -668,7 +685,7 @@
 ; удалась (LEP:InsertPole сама решает, когда это происходит).
 ;=====================================================================
 
-(defun LEP:PlacePoleOnRoute (Route RouteID ClassLabel ClickPoint PoleType Status / InsertResult NewVertex Rotation PoleEnt LabelEnt)
+(defun LEP:PlacePoleOnRoute (Route RouteID ClassLabel ClickPoint PoleType Status VClass / InsertResult NewVertex Rotation PoleEnt LabelEnt)
 
     ;; Находим ближайшую точку на линии и вставляем туда новую вершину
     ;; полилинии. Заодно получаем концы отрезка маршрута под ней -
@@ -678,7 +695,7 @@
     (setq Rotation (LEP:GetPoleRotation (cadr InsertResult) (caddr InsertResult)))
 
     ;; Вставляем символ опоры (1/2/3 трапеции по типу) в новую вершину.
-    (setq PoleEnt (LEP:InsertPole NewVertex Rotation PoleType Status))
+    (setq PoleEnt (LEP:InsertPole NewVertex Rotation PoleType Status VClass))
 
     (if PoleEnt
         (progn
@@ -790,7 +807,7 @@
                                     ;;      данные - общая функция (см. её
                                     ;;      шапку выше), используется и в
                                     ;;      C:LEP-POLE-MOVE.
-                                    (setq PoleEnt (LEP:PlacePoleOnRoute Route RouteID ClassLabel ClickPoint PoleType Status))
+                                    (setq PoleEnt (LEP:PlacePoleOnRoute Route RouteID ClassLabel ClickPoint PoleType Status VClass))
 
                                     ;; 7. Запоминаем точку - от неё будет
                                     ;;    отсчитываться расстояние для
@@ -996,7 +1013,7 @@
                     (if NewPoint
                         (progn
                             (LEP:DeletePoleGroup Ent)
-                            (setq NewPoleEnt (LEP:PlacePoleOnRoute Route RouteID ClassLabel NewPoint PoleType Status))
+                            (setq NewPoleEnt (LEP:PlacePoleOnRoute Route RouteID ClassLabel NewPoint PoleType Status VClass))
                             (if NewPoleEnt
                                 (princ "\n[LEP-POLE-MOVE] Опора перенесена.")
                                 (princ "\n[LEP-POLE-MOVE] Не удалось вставить опору на новом месте - старая уже удалена, поставьте новую вручную командой LEP-POLE.")
@@ -1170,7 +1187,7 @@
                             ;; лежит ни на каком отрезке трассы, "направления"
                             ;; для неё физически нет) - ставим символ без
                             ;; поворота (0.0 радиан).
-                            (setq PoleEnt (LEP:InsertPole ClickPoint 0.0 PoleType Status))
+                            (setq PoleEnt (LEP:InsertPole ClickPoint 0.0 PoleType Status VClass))
 
                             (if PoleEnt
                                 (progn
@@ -1205,5 +1222,5 @@
 )
 
 
-(princ "\nLEP-POLE v0.9 загружен (аудит: порядок вопросов, честный STATUS).")
+(princ "\nLEP-POLE v1.7 загружен (слой опоры по классу напряжения x статус).")
 (princ)

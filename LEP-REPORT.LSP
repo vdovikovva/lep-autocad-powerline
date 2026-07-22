@@ -1,7 +1,10 @@
 ;=====================================================================
 ; ПРОЕКТ:       LEP (Автоматизация проектирования ЛЭП)
 ; ФАЙЛ:         LEP-REPORT.LSP
-; ВЕРСИЯ:       1.6  (LEP:GetEquipLabel - комментарий про обратную
+; ВЕРСИЯ:       1.7  (ЭТАП 2.6 - наземные КТП, отдельный скан слоя
+;               *LEP-Layer-Proj-TP*, название строки включает номер
+;               КТП, Claude, 2026-07-22)
+;               1.6  (LEP:GetEquipLabel - комментарий про обратную
 ;               совместимость МТП по мощности, Claude, 2026-07-16)
 ;               1.5  (убрано ложное предупреждение "чертёж не в папке
 ;               модулей" - правило DWG-рядом-с-модулями снято, Claude,
@@ -260,8 +263,8 @@
 )
 
 
-(defun C:LEP-REPORT ( / VL-SS PoleSS ExistPoleSS i Ent RouteID Status WireName WireLength
-                        PoleName EquipCode EquipName EquipStatus MasterList MergedList CsvPath CsvFile FileCheck
+(defun C:LEP-REPORT ( / VL-SS PoleSS ExistPoleSS KtpSS i Ent RouteID Status WireName WireLength
+                        PoleName EquipCode EquipName EquipStatus KtpName MasterList MergedList CsvPath CsvFile FileCheck
                         RouteItem)
 
     (LEP:PrintHeader "Выгрузка ведомости в CSV (только Проект.)")
@@ -403,6 +406,50 @@
     )
 
     ;=================================================================
+    ; ЭТАП 2.6: ПРОЕКТИРУЕМЫЕ КТП (2026-07-22)
+    ;
+    ; КТП - НЕ опора, но, как и опора, теперь тоже БЛОК (INSERT) - см.
+    ; LEP-KTPSYM.LSP (*LEP-Block-Ktp*, прямоугольник+треугольник ОДНИМ
+    ; объектом) - сканируется отдельно, на своём слое (*LEP-Layer-Proj-TP*,
+    ; заведён давно, но простаивал до появления КТП). Номер КТП
+    ; (свободный ввод, LEP:AddKtpData)
+    ; включается в название строки - иначе разные КТП с одинаковым
+    ; названием "КТП" слились бы в одну строку с суммой "2 шт." вместо
+    ; двух отдельных, различимых по номеру строк.
+    ;=================================================================
+
+    (setq KtpSS (ssget "_X" (list '(0 . "INSERT") (cons 8 *LEP-Layer-Proj-TP*))))
+
+    (if KtpSS
+        (progn
+            (setq i 0)
+            (repeat (sslength KtpSS)
+                (setq Ent (ssname KtpSS i))
+                (if (= (LEP:GetDataValue Ent "TYPE") "KTP")
+                    (progn
+                        (setq Status (LEP:GetDataValue Ent "STATUS"))
+                        (if (= Status "PROJECT")
+                            (progn
+                                (setq RouteID (LEP:GetDataValue Ent "ROUTE"))
+                                (if (not RouteID) (setq RouteID "БЕЗ_ТРАССЫ"))
+
+                                (setq KtpName
+                                    (strcat
+                                        "КТП-" (LEP:GetDataValue Ent "NUMBER")
+                                        " (" (LEP:GetDataValue Ent "MARKA") ")"
+                                    )
+                                )
+                                (setq MasterList (LEP:AddToMasterList MasterList RouteID KtpName 1 "шт."))
+                            )
+                        )
+                    )
+                )
+                (setq i (1+ i))
+            )
+        )
+    )
+
+    ;=================================================================
     ; ЭТАП 4: ЗАПИСЬ В CSV
     ;
     ; ⚠️ ФИКС 2026-07-16: раньше здесь (ЭТАП 3) было предупреждение
@@ -471,5 +518,5 @@
 )
 
 
-(princ "\nМодуль LEP-REPORT v1.3 загружен (метраж целым числом).")
+(princ "\nМодуль LEP-REPORT v1.7 загружен (КТП в ведомости).")
 (princ)

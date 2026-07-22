@@ -7,6 +7,12 @@
 ;   LEP-SETUP.LSP
 ;
 ;   ВЕРСИЯ:
+;   1.0  (LEP:SetLayerTrueColor - True Color подтверждён живым тестом
+;        2026-07-22, применён к 4 слоям (0,4кВ Сущ. ВЛ/опоры, КЛ ГНБ/
+;        Траншея) - Claude)
+;   0.9  (Проект. КЛ - два слоя вместо одного, ГНБ/Траншея, временные
+;        ACI-цвета до подтверждения True Color; слой LEP-GEOPOINTS -
+;        Claude, 2026-07-20/22)
 ;   0.8  (DIMSAH/DIMBLK1/DIMBLK2/DIMLDRBLK - стрелка "Oblique" -
 ;        Claude, 2026-07-15)
 ;   0.7  (DIMTIH/DIMTOH/DIMTAD - текст размерной линии пролёта
@@ -116,6 +122,44 @@
             (if (assoc 290 LayerData)
                 (setq LayerData (subst (cons 290 0) (assoc 290 LayerData) LayerData))
                 (setq LayerData (append LayerData (list (cons 290 0))))
+            )
+            (entmod LayerData)
+        )
+    )
+)
+
+
+
+;=====================================================================
+;                       СЛУЖЕБНАЯ ФУНКЦИЯ
+;=====================================================================
+;
+; LEP:SetLayerTrueColor
+;
+; Задаёт слою НАСТОЯЩИЙ RGB-цвет (True Color), а не обычный номер ACI
+; (1-255), которым пользуется весь остальной проект. Через entmod
+; DXF-группы 420 у таблицы LAYER (24-битное упакованное значение
+; R*65536 + G*256 + B) - ✅ ПОДТВЕРЖДЕНО ЖИВЫМ ТЕСТОМ 2026-07-22
+; (пользователь создал тестовый слой этим же кодом, диспетчер слоёв
+; AutoCAD показал реальный фиолетовый цвет, не серый/дефолтный) - тот
+; же принцип "менять DXF-группу напрямую, не через command", что и у
+; LEP:SetLayerNoPlot выше (группа 290) - надёжнее, чем гадать порядок
+; аргументов `-LAYER Color Truecolor ...` в командной строке.
+;
+; Вызывается ПОСЛЕ LEP:CreateLayer (которая создаёт слой с обычным
+; ACI-цветом как начальным значением) - True Color просто
+; переопределяет его сразу следующей строкой в C:LEP-SETUP.
+;=====================================================================
+
+(defun LEP:SetLayerTrueColor (LayerName R G B / LayerEnt LayerData Value)
+    (setq LayerEnt (tblobjname "LAYER" LayerName))
+    (if LayerEnt
+        (progn
+            (setq LayerData (entget LayerEnt))
+            (setq Value (+ (* R 65536) (* G 256) B))
+            (if (assoc 420 LayerData)
+                (setq LayerData (subst (cons 420 Value) (assoc 420 LayerData) LayerData))
+                (setq LayerData (append LayerData (list (cons 420 Value))))
             )
             (entmod LayerData)
         )
@@ -362,27 +406,76 @@
 
     ;;------------------------------------------------------------
     ;; Воздушные линии
+    ;;
+    ;; ✅ ДОБАВЛЕНО 2026-07-22 (по просьбе пользователя - цвет зависит
+    ;; от класса напряжения, не только от статуса): 4 слоя вместо 2.
+    ;; 10кВ Проект - оранжевый (без изменений), 0,4кВ Проект - синий,
+    ;; 10кВ Сущ - красный, 0,4кВ Сущ - True Color (✅ подтверждён живым
+    ;; тестом 2026-07-22, см. LEP:SetLayerTrueColor выше).
     ;;------------------------------------------------------------
 
     (LEP:CreateLayer
-        *LEP-Layer-Proj-VL*
+        *LEP-Layer-Proj-VL-10*
         *LEP-Color-Proj-VL*
     )
 
     (LEP:CreateLayer
-        *LEP-Layer-Exist-VL*
-        *LEP-Color-Exist*
+        *LEP-Layer-Proj-VL-04*
+        *LEP-Color-Proj-VL-04*
+    )
+
+    (LEP:CreateLayer
+        *LEP-Layer-Exist-VL-10*
+        *LEP-Color-Exist-VL-10*
+    )
+
+    (LEP:CreateLayer
+        *LEP-Layer-Exist-VL-04*
+        *LEP-Color-Exist-VL-04-Placeholder*
+    )
+    ;; ✅ True Color подтверждён живым тестом 2026-07-22 - переопределяем
+    ;; ACI-заглушку выше настоящим RGB.
+    (LEP:SetLayerTrueColor
+        *LEP-Layer-Exist-VL-04*
+        (car *LEP-TrueColor-Exist-VL-04*)
+        (cadr *LEP-TrueColor-Exist-VL-04*)
+        (caddr *LEP-TrueColor-Exist-VL-04*)
     )
 
 
 
     ;;------------------------------------------------------------
     ;; Кабельные линии
+    ;;
+    ;; ✅ ДОБАВЛЕНО 2026-07-22: Проект. КЛ теперь два слоя вместо одного
+    ;; (способ прокладки ГНБ/Траншея, см. LEP-CONFIG.LSP - там же
+    ;; объяснение, почему *LEP-Layer-Proj-KL* САМ по себе больше НЕ
+    ;; передаётся в LEP:CreateLayer напрямую - это теперь составная
+    ;; строка "слой1,слой2" для сканирования, а не имя одного слоя).
+    ;; Цвета - True Color (✅ подтверждён живым тестом 2026-07-22, см.
+    ;; LEP:SetLayerTrueColor выше).
     ;;------------------------------------------------------------
 
     (LEP:CreateLayer
-        *LEP-Layer-Proj-KL*
-        *LEP-Color-Proj-KL*
+        *LEP-Layer-Proj-KL-GNB*
+        *LEP-Color-Proj-KL-GNB-Placeholder*
+    )
+    (LEP:SetLayerTrueColor
+        *LEP-Layer-Proj-KL-GNB*
+        (car *LEP-TrueColor-Proj-KL-GNB*)
+        (cadr *LEP-TrueColor-Proj-KL-GNB*)
+        (caddr *LEP-TrueColor-Proj-KL-GNB*)
+    )
+
+    (LEP:CreateLayer
+        *LEP-Layer-Proj-KL-Trench*
+        *LEP-Color-Proj-KL-Trench-Placeholder*
+    )
+    (LEP:SetLayerTrueColor
+        *LEP-Layer-Proj-KL-Trench*
+        (car *LEP-TrueColor-Proj-KL-Trench*)
+        (cadr *LEP-TrueColor-Proj-KL-Trench*)
+        (caddr *LEP-TrueColor-Proj-KL-Trench*)
     )
 
     (LEP:CreateLayer
@@ -396,19 +489,37 @@
     ;; Опоры
     ;;------------------------------------------------------------
 
-    ;; Цвет проектируемых опор - ОРАНЖЕВЫЙ (*LEP-Color-Proj-VL*), не
+    ;; Цвет проектируемых опор 10кВ - ОРАНЖЕВЫЙ (*LEP-Color-Proj-VL*), не
     ;; красный (*LEP-Color-Proj*) - по просьбе пользователя 2026-07-10,
     ;; т.к. красный совпадал по цвету со служебной линией маршрута и
-    ;; визуально путался с ней. Существующие опоры (ниже) остаются
-    ;; серыми, как и раньше.
+    ;; визуально путался с ней.
+    ;;
+    ;; ✅ ДОБАВЛЕНО 2026-07-22: та же логика "класс x статус", что и у
+    ;; ВЛ выше - 4 слоя вместо 2 (см. подробности в LEP-CONFIG.LSP).
     (LEP:CreateLayer
-        *LEP-Layer-Proj-Pole*
+        *LEP-Layer-Proj-Pole-10*
         *LEP-Color-Proj-VL*
     )
 
     (LEP:CreateLayer
-        *LEP-Layer-Exist-Pole*
-        *LEP-Color-Exist*
+        *LEP-Layer-Proj-Pole-04*
+        *LEP-Color-Proj-VL-04*
+    )
+
+    (LEP:CreateLayer
+        *LEP-Layer-Exist-Pole-10*
+        *LEP-Color-Exist-VL-10*
+    )
+
+    (LEP:CreateLayer
+        *LEP-Layer-Exist-Pole-04*
+        *LEP-Color-Exist-VL-04-Placeholder*
+    )
+    (LEP:SetLayerTrueColor
+        *LEP-Layer-Exist-Pole-04*
+        (car *LEP-TrueColor-Exist-VL-04*)
+        (cadr *LEP-TrueColor-Exist-VL-04*)
+        (caddr *LEP-TrueColor-Exist-VL-04*)
     )
 
 
@@ -493,6 +604,24 @@
         *LEP-Layer-Dim*
         *LEP-Color-Dim*
     )
+
+
+
+    ;;------------------------------------------------------------
+    ;; GPS-точки (временные зелёные кружки-ориентиры, LEP-GEOPOINTS.LSP)
+    ;;
+    ;; Непечатаемый служебный слой - тот же принцип, что и у
+    ;; *LEP-Layer-Route* (LEP:SetLayerNoPlot ниже): это рабочий
+    ;; ориентир для расстановки опор, а не часть готового чертежа,
+    ;; не должен случайно попасть в PDF, даже если пользователь забудет
+    ;; его выключить/очистить перед печатью.
+    ;;------------------------------------------------------------
+
+    (LEP:CreateLayer
+        *LEP-Layer-GeoPoints*
+        *LEP-Color-GeoPoints*
+    )
+    (LEP:SetLayerNoPlot *LEP-Layer-GeoPoints*)
 
 
 

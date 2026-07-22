@@ -2,7 +2,11 @@
 ;
 ;   ПРОЕКТ:      LEP
 ;   ФАЙЛ:        LEP-START.LSP
-;   ВЕРСИЯ:      0.5  (TRUSTEDPATHS больше не зависит от папки DWG -
+;   ВЕРСИЯ:      0.7  (добавлен модуль LEP-KTPSYM.LSP - символ КТП,
+;                автосоздание блока при загрузке - Claude, 2026-07-22)
+;   0.6  (добавлен модуль LEP-GEOPOINTS.LSP - GPS-точки из
+;                GeoJSON -> зелёные кружки-ориентиры - Claude, 2026-07-20)
+;   0.5  (TRUSTEDPATHS больше не зависит от папки DWG -
 ;                Support File Search Path подтверждён живым тестом,
 ;                Claude, 2026-07-16)
 ;   0.4  (испр. Claude)
@@ -137,6 +141,11 @@
 ; 11. REPORT     ведомость опор, кабелей и проводов
 ; 12. END        оконечное оборудование маршрута (МТП/ПУ) -- ДОБАВЛЕНО
 ;                (грузится ПОСЛЕ POLE - использует его функции)
+; 13. GEOPOINTS  GPS-точки из GeoJSON -> зелёные кружки-ориентиры --
+;                ДОБАВЛЕНО 2026-07-20
+; 14. KTPSYM     символ КТП (прямоугольник+треугольник) -- ДОБАВЛЕНО
+;                2026-07-22 (грузится ПЕРЕД END - использует его
+;                функции)
 ;
 ;=====================================================================
 
@@ -152,12 +161,14 @@
 (LEP:LoadFile "LEP-SETUP.LSP")
 (LEP:LoadFile "LEP-POLYLINE.LSP")
 (LEP:LoadFile "LEP-POLESYM.LSP")
+(LEP:LoadFile "LEP-KTPSYM.LSP")
 (LEP:LoadFile "LEP-ROUTE.LSP")
 (LEP:LoadFile "LEP-POLE.LSP")
 (LEP:LoadFile "LEP-SPAN.LSP")
 (LEP:LoadFile "LEP-SCALE.LSP")
 (LEP:LoadFile "LEP-REPORT.LSP")
 (LEP:LoadFile "LEP-END.LSP")
+(LEP:LoadFile "LEP-GEOPOINTS.LSP")
 
 
 ;=====================================================================
@@ -195,6 +206,11 @@
 
 (LEP:CreatePoleSymbolBlock)
 
+;; Тот же принцип - блок-символ КТП (прямоугольник+треугольник,
+;; LEP-KTPSYM.LSP, *LEP-Block-Ktp* в CONFIG) нужен ВСЕГДА, создаётся
+;; автоматически, сама ничего не делает повторно, если блок уже есть.
+(LEP:CreateKtpSymbolBlock)
+
 (princ "\n")
 (princ "======================================")
 (princ "\n LEP загружен успешно")
@@ -207,8 +223,12 @@
 (princ "\n LEP-POLE-MOVE")
 (princ "\n LEP-END")
 (princ "\n LEP-SPAN")
+(princ "\n LEP-SPAN-REPAIR")
 (princ "\n LEP-SCALE")
 (princ "\n LEP-REPORT")
+(princ "\n LEP-GEOPOINTS-EXTRACT")
+(princ "\n LEP-GEOPOINTS-DRAW")
+(princ "\n LEP-GEOPOINTS-CLEAR")
 (princ "\n======================================")
  
 (princ)

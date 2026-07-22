@@ -3,7 +3,13 @@
 ;
 ;   ПРОЕКТ:      LEP
 ;   ФАЙЛ:        LEP-DATA.LSP
-;   ВЕРСИЯ:      0.8  (LEP:ReassignRoute - массовая перепривязка опор/
+;   ВЕРСИЯ:      1.0  (LEP:AddKtpData - данные наземной КТП, Claude,
+;                2026-07-22)
+;   0.9  (LEP:SetSpanLabelHandle - для объединения подписей
+;                соседних пролётов одной марки/типа; ReassignSpanRoute
+;                сохраняет новые поля пролёта (RAWLENGTH/POLE1HANDLE/
+;                POLE2HANDLE/LABELHANDLE/METHOD), Claude, 2026-07-22)
+;   0.8  (LEP:ReassignRoute - массовая перепривязка опор/
 ;                пролётов на другой RouteID, Claude, 2026-07-16)
 ;   0.7  (LEP:AddEquipToExistingPole - оборудование на
 ;                СУЩЕСТВУЮЩЕЙ опоре, не перезаписывая её XDATA, Claude,
@@ -481,6 +487,36 @@
 
 ;=====================================================================
 ;
+; LEP:AddKtpData
+;
+; Данные наземной КТП (2026-07-22) - НЕ опора, свой набор ключей: TYPE
+; "KTP" (не "POLE" - LEP-REPORT.LSP сканирует её отдельным этапом, а
+; LEP:PickPole/LEP-SPAN не должны принимать её за опору пролёта -
+; фильтр TYPE="POLE" там уже есть, KTP под него не попадёт). Number/
+; Power/Marka - свободный ввод пользователя (нет фиксированного
+; списка, в отличие от МТП/СТП - см. LEP-CONFIG.LSP).
+;
+;=====================================================================
+
+(defun LEP:AddKtpData (Ent RouteID Status Number Power Marka)
+
+    (LEP:SetData
+        Ent
+        (list
+            (cons "TYPE" "KTP")
+            (cons "ROUTE" RouteID)
+            (cons "STATUS" Status)
+            (cons "NUMBER" Number)
+            (cons "POWER" Power)
+            (cons "MARKA" Marka)
+        )
+    )
+
+)
+
+
+;=====================================================================
+;
 ; LEP:ReassignPoleRoute / LEP:ReassignSpanRoute / LEP:ReassignRoute
 ;
 ; Массовая перепривязка объектов с ОДНОГО RouteID на ДРУГОЙ - нужно,
@@ -538,14 +574,19 @@
 )
 
 
-(defun LEP:ReassignSpanRoute (Ent NewRouteID / Status Wire Section Length)
+(defun LEP:ReassignSpanRoute (Ent NewRouteID / Status Wire Section Length RawLength Pole1 Pole2 LabelHandle Method DataList)
 
-    (setq Status  (LEP:GetDataValue Ent "STATUS"))
-    (setq Wire    (LEP:GetDataValue Ent "WIRE"))
-    (setq Section (LEP:GetDataValue Ent "SECTION"))
-    (setq Length  (LEP:GetDataValue Ent "LENGTH"))
+    (setq Status     (LEP:GetDataValue Ent "STATUS"))
+    (setq Wire       (LEP:GetDataValue Ent "WIRE"))
+    (setq Section    (LEP:GetDataValue Ent "SECTION"))
+    (setq Length     (LEP:GetDataValue Ent "LENGTH"))
+    (setq RawLength  (LEP:GetDataValue Ent "RAWLENGTH"))
+    (setq Pole1      (LEP:GetDataValue Ent "POLE1HANDLE"))
+    (setq Pole2      (LEP:GetDataValue Ent "POLE2HANDLE"))
+    (setq LabelHandle (LEP:GetDataValue Ent "LABELHANDLE"))
+    (setq Method     (LEP:GetDataValue Ent "METHOD"))
 
-    (LEP:SetData Ent
+    (setq DataList
         (list
             (cons "TYPE" "SPAN")
             (cons "ROUTE" NewRouteID)
@@ -553,6 +594,70 @@
             (cons "WIRE" Wire)
             (cons "SECTION" Section)
             (cons "LENGTH" Length)
+        )
+    )
+    ;; Поля, добавленные позже (2026-07-22 - объединение подписей
+    ;; пролётов/способ прокладки КЛ) - не у КАЖДОГО пролёта они есть
+    ;; (старые пролёты, нарисованные до этой правки, их не имеют) -
+    ;; дописываем только если реально были, тем же приёмом, что уже
+    ;; используется чуть выше для LABELHANDLE/EQUIP у опор.
+    (if RawLength   (setq DataList (append DataList (list (cons "RAWLENGTH" RawLength)))))
+    (if Pole1       (setq DataList (append DataList (list (cons "POLE1HANDLE" Pole1)))))
+    (if Pole2       (setq DataList (append DataList (list (cons "POLE2HANDLE" Pole2)))))
+    (if LabelHandle (setq DataList (append DataList (list (cons "LABELHANDLE" LabelHandle)))))
+    (if Method      (setq DataList (append DataList (list (cons "METHOD" Method)))))
+
+    (LEP:SetData Ent DataList)
+)
+
+
+;=====================================================================
+;
+; LEP:SetSpanLabelHandle
+;
+; Переписывает XDATA пролёта, меняя ТОЛЬКО LABELHANDLE - остальные
+; поля читаются и записываются обратно как есть (тот же приём
+; "прочитать всё - переписать всё же самое + одно новое/изменённое
+; поле", что уже применяется в LEP:AddEquipToExistingPole/
+; LEP:ReassignSpanRoute выше - LEP:SetData ПЕРЕЗАПИСЫВАЕТ XDATA
+; целиком, значит частичное обновление одного поля без этого приёма
+; стёрло бы остальные).
+;
+; Нужна для объединения подписей соседних пролётов одной марки/типа
+; (LEP-SPAN.LSP, 2026-07-22, по просьбе пользователя): когда несколько
+; пролётов сливаются в одну общую подпись, ВСЕМ им нужно переписать
+; LABELHANDLE на хендл этой новой общей подписи (не только вновь
+; создаваемому пролёту).
+;
+;=====================================================================
+
+(defun LEP:SetSpanLabelHandle (Ent NewLabelHandle / Status Wire Section Length RawLength Pole1 Pole2 Method RouteID)
+
+    (setq RouteID    (LEP:GetDataValue Ent "ROUTE"))
+    (setq Status     (LEP:GetDataValue Ent "STATUS"))
+    (setq Wire       (LEP:GetDataValue Ent "WIRE"))
+    (setq Section    (LEP:GetDataValue Ent "SECTION"))
+    (setq Length     (LEP:GetDataValue Ent "LENGTH"))
+    (setq RawLength  (LEP:GetDataValue Ent "RAWLENGTH"))
+    (setq Pole1      (LEP:GetDataValue Ent "POLE1HANDLE"))
+    (setq Pole2      (LEP:GetDataValue Ent "POLE2HANDLE"))
+    (setq Method     (LEP:GetDataValue Ent "METHOD"))
+
+    (LEP:SetData Ent
+        (append
+            (list
+                (cons "TYPE" "SPAN")
+                (cons "ROUTE" RouteID)
+                (cons "STATUS" Status)
+                (cons "WIRE" Wire)
+                (cons "SECTION" Section)
+                (cons "LENGTH" Length)
+                (cons "RAWLENGTH" RawLength)
+                (cons "POLE1HANDLE" Pole1)
+                (cons "POLE2HANDLE" Pole2)
+                (cons "LABELHANDLE" NewLabelHandle)
+            )
+            (if Method (list (cons "METHOD" Method)) nil)
         )
     )
 )
@@ -643,5 +748,5 @@
 )
 
 
-(princ "\nLEP-DATA v0.8 загружен (номер маршрута из чертежа, честный STATUS, оборудование на сущ. опоре, массовая перепривязка трассы).")
+(princ "\nLEP-DATA v1.0 загружен (данные КТП, объединение подписей пролётов, честный STATUS, массовая перепривязка трассы).")
 (princ)

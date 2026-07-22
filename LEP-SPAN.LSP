@@ -2,7 +2,52 @@
 ;
 ;   ПРОЕКТ:      LEP
 ;   ФАЙЛ:        LEP-SPAN.LSP
-;   ВЕРСИЯ:      1.1  (LEP:CreateSpanLabel - "L=...м" на второй строке,
+;   ВЕРСИЯ:      1.7  (2026-07-22: ГЕОМЕТРИЧЕСКОЕ определение маршрута -
+;                LEP:FindRoutesThroughPoints ищет, какие трассы реально
+;                проходят через обе кликнутые опоры; при нескольких
+;                кандидатах - один вопрос с запоминанием ответа на
+;                сессию. Нужно для случая "маршрут 2 проложен поверх
+;                опор маршрута 1" (общий участок двух фидеров) - опора
+;                в XDATA помнит только тот маршрут, которым её
+;                создали - Claude)
+;   1.6  (2026-07-22: несколько проводов на одной паре
+;                опор (общий участок двух маршрутов, или просто вторая
+;                марка одного маршрута) больше НЕ рисуются друг на
+;                друге - LEP:FindSamePolePairSpans находит уже
+;                существующие пролёты на той же паре опор,
+;                LEP:GetParallelOffset/OffsetPointList сдвигают новую
+;                линию перпендикулярно, поочерёдно в разные стороны;
+;                размерная линия рисуется только у первого пролёта на
+;                паре опор (у остальных геометрия та же) - Claude)
+;   1.5  (2026-07-22: Т-образное подключение веток -
+;                проверка "опоры на одной трассе" из v1.4 переспрашивает,
+;                а не отказывает намертво, если пользователь подтвердит
+;                намеренное подключение опоры одной трассы к опоре
+;                другой - геометрия пролёта в этом случае прямая линия
+;                P1-P2 (нет единой трассы для нарезки по вершинам) -
+;                Claude)
+;   1.4  (2026-07-22: убран клик по маршруту в C:LEP-SPAN -
+;                трасса определяется по ROUTE первой опоры
+;                (LEP:FindRouteByID), со сверкой, что вторая опора той
+;                же трассы; толщина линии пролёта по статусу
+;                (LEP:SetEntityLWeight, как у опоры); новая команда
+;                LEP-SPAN-REPAIR - чинит "осиротевшие" подписи после
+;                ручного ERASE пролёта - Claude)
+;   1.3  (2026-07-22: третий класс напряжения "6 кВ" -
+;                выбор марки провода ВЛ переделан с бинарного if на
+;                cond из трёх веток (10/6/0,4), иначе "6" молча попало
+;                бы в ветку СИП-2 (0,4кВ) как "любой не 10" - Claude)
+;   1.2  (2026-07-22, по просьбе пользователя: подпись
+;                объединяется на весь однородный участок трассы вместо
+;                одного пролёта - LEP:FinalizeSpanLabel/
+;                GetSpanNeighbors/FindGroupMembers; подпись ВЛ теперь
+;                БЕЗ запаса на провис (запас остаётся только в
+;                ведомости), подпись КЛ - по-прежнему С запасом на
+;                подъём кабеля (до дальнейших указаний); "+ подъём
+;                кабеля по опоре" автоматически на обеих опорах КЛ-
+;                пролёта; способ прокладки (ГНБ/Траншея) для Проект.
+;                КЛ - Claude)
+;   1.1  (LEP:CreateSpanLabel - "L=...м" на второй строке,
 ;                Claude, 2026-07-16)
 ;                1.0  (LEP:BringToFront для подписи пролёта и размерной
 ;                линии, Claude, 2026-07-15)
@@ -105,13 +150,21 @@
 ; естественный фильтр, отличающий настоящую опору от её откоса и от
 ; чужих блоков.
 ;
-; Возвращает: точку (x y) или nil.
+; Возвращает: (cons Точка Ent) или nil.
+;
+; ⚠️ ФИКС 2026-07-22: раньше возвращала ТОЛЬКО точку - для объединения
+; подписей соседних пролётов (см. LEP:GetSpanNeighbors ниже) нужен
+; ХЕНДЛ самой опоры, чтобы отличать "эти два пролёта касаются одной и
+; той же опоры" НАДЁЖНО (по хендлу), а не по совпадению координат с
+; допуском - на допуске уже ловили баги в этом проекте (см.
+; *LEP-Vertex-Snap-Tolerance* в LEP-POLE.LSP). Оба места вызова в
+; C:LEP-SPAN ниже поправлены под новый формат возврата (car/cdr).
 ;=====================================================================
 
-(defun LEP:PickPole (PromptText / PickResult Ent EntData Pt)
+(defun LEP:PickPole (PromptText / PickResult Ent EntData Pt Result)
 
     (setq PickResult (entsel PromptText))
-    (setq Pt nil)
+    (setq Result nil)
 
     (if PickResult
         (progn
@@ -121,13 +174,16 @@
             (if (and (= (cdr (assoc 0 EntData)) "INSERT")
                      (= (LEP:GetDataValue Ent "TYPE") "POLE")
                 )
-                (setq Pt (cdr (assoc 10 EntData))) ; точка вставки блока - без приближений
+                (progn
+                    (setq Pt (cdr (assoc 10 EntData))) ; точка вставки блока - без приближений
+                    (setq Result (cons Pt Ent))
+                )
                 (princ "\n[LEP-SPAN] Это не опора (возможно, откос или посторонний блок) - кликните по ГЛАВНОЙ трапеции опоры.")
             )
         )
     )
 
-    Pt
+    Result
 )
 ;=====================================================================
 ; LEP:GetNearestVertexIndex
@@ -409,19 +465,685 @@
     (LEP:BringToFront (entlast))
 
     (setvar "CLAYER" OldLayer)
+
+    ;; ⚠️ ДОБАВЛЕНО 2026-07-22: возвращает саму созданную подпись -
+    ;; нужно для объединения подписей соседних пролётов (LABELHANDLE
+    ;; в XDATA пролёта, см. LEP:FinalizeSpanLabel ниже) - тот же приём,
+    ;; что уже есть у LEP:CreatePoleLabel в LEP-POLE.LSP.
+    (entlast)
 )
- 
- 
+
+
+;=====================================================================
+; LEP:GetSpanEndpoints
+;
+; Первая и последняя вершина УЖЕ СОЗДАННОГО объекта-пролёта (LWPOLYLINE) -
+; читает геометрию через LEP:GetVertices (LEP-POLYLINE.LSP, общая
+; функция для любой LWPOLYLINE), а не хранит SubVerts отдельно. Нужна
+; при объединении подписей - чтобы найти крайние точки ВСЕЙ группы
+; пролётов, а не только вновь созданного (см. LEP:FinalizeSpanLabel).
+;=====================================================================
+
+(defun LEP:GetSpanEndpoints (SpanEnt / V)
+    (setq V (LEP:GetVertices SpanEnt))
+    (list (car V) (last V))
+)
+
+
+;=====================================================================
+; LEP:GetSpanNeighbors
+;
+; Находит пролёты ЭТОГО ЖЕ маршрута, у которых POLE1HANDLE или
+; POLE2HANDLE совпадает с заданным PoleHandle - то есть "соседний
+; пролёт, упирающийся в ту же самую опору" (по хендлу, не по
+; координатам - см. ⚠️ у LEP:PickPole выше). Сканирует те же 4 слоя
+; пролётов (ВЛ+КЛ, Проект.+Сущ.), что и LEP:ReassignRoute
+; (LEP-DATA.LSP) - тот же проверенный приём "ssget с слоями через
+; запятую в одном фильтре". ExcludeEnt - сам новый пролёт, чтобы не
+; найти самого себя соседом.
+;
+; ⚠️ Старые пролёты (нарисованные ДО этой правки, 2026-07-22) не имеют
+; POLE1HANDLE/POLE2HANDLE вообще (LEP:GetDataValue вернёт nil) - они
+; просто никогда не совпадут ни с одним PoleHandle и не найдутся
+; соседями. Это осознанное ограничение, не баг: объединение подписей
+; заработает только между пролётами, созданными ПОСЛЕ этого обновления.
+;=====================================================================
+
+(defun LEP:GetSpanNeighbors (RouteID PoleHandle ExcludeEnt / SS i Ent Result)
+
+    (setq Result nil)
+
+    (setq SS
+        (ssget "_X"
+            (list
+                '(0 . "LWPOLYLINE")
+                (cons 8
+                    (strcat
+                        *LEP-Layer-Proj-VL* "," *LEP-Layer-Exist-VL* ","
+                        *LEP-Layer-Proj-KL* "," *LEP-Layer-Exist-KL*
+                    )
+                )
+            )
+        )
+    )
+
+    (if SS
+        (progn
+            (setq i 0)
+            (repeat (sslength SS)
+                (setq Ent (ssname SS i))
+                (if (and (/= Ent ExcludeEnt)
+                         (= (LEP:GetDataValue Ent "ROUTE") RouteID)
+                         (or (= (LEP:GetDataValue Ent "POLE1HANDLE") PoleHandle)
+                             (= (LEP:GetDataValue Ent "POLE2HANDLE") PoleHandle)
+                         )
+                    )
+                    (setq Result (append Result (list Ent)))
+                )
+                (setq i (1+ i))
+            )
+        )
+    )
+
+    Result
+)
+
+
+;=====================================================================
+; LEP:FindGroupMembers
+;
+; Все пролёты ЭТОГО ЖЕ маршрута, у которых LABELHANDLE совпадает с
+; заданным - то есть ВСЯ текущая группа пролётов, объединённых под
+; одной общей подписью (может быть всего один пролёт, если он ещё ни
+; с кем не сливался). Тот же приём сканирования, что и в
+; LEP:GetSpanNeighbors выше.
+;=====================================================================
+
+(defun LEP:FindGroupMembers (LabelHandle RouteID / SS i Ent Result)
+
+    (setq Result nil)
+    (if LabelHandle
+        (progn
+            (setq SS
+                (ssget "_X"
+                    (list
+                        '(0 . "LWPOLYLINE")
+                        (cons 8
+                            (strcat
+                                *LEP-Layer-Proj-VL* "," *LEP-Layer-Exist-VL* ","
+                                *LEP-Layer-Proj-KL* "," *LEP-Layer-Exist-KL*
+                            )
+                        )
+                    )
+                )
+            )
+            (if SS
+                (progn
+                    (setq i 0)
+                    (repeat (sslength SS)
+                        (setq Ent (ssname SS i))
+                        (if (and (= (LEP:GetDataValue Ent "ROUTE") RouteID)
+                                 (= (LEP:GetDataValue Ent "LABELHANDLE") LabelHandle)
+                            )
+                            (setq Result (append Result (list Ent)))
+                        )
+                        (setq i (1+ i))
+                    )
+                )
+            )
+        )
+    )
+    Result
+)
+
+
+;=====================================================================
+; LEP:FinalizeSpanLabel
+;
+; ОРКЕСТРАЦИЯ объединения подписей (по просьбе пользователя 2026-07-22:
+; "подписывать не каждый пролёт, а целиком линию трассы, если тип
+; прокладки не меняется"). Вызывается ПОСЛЕ того, как новый пролёт
+; SpanEnt уже создан и его начальная XDATA (без LABELHANDLE) уже
+; записана.
+;
+; Механизм ("как программа распознаёт, что пролёты надо объединить" -
+; вопрос пользователя, ответ ниже):
+;   1. Ищем СОСЕДНИЕ пролёты этого маршрута с ОБЕИХ сторон нового
+;      пролёта (LEP:GetSpanNeighbors, по хендлам опор P1/P2 - НАДЁЖНО,
+;      не зависит от порядка, в котором пользователь кликает пролёты:
+;      хоть по порядку вдоль трассы, хоть вразнобой, хендл опоры один
+;      и тот же в любом случае).
+;   2. Из найденных соседей оставляем только те, у которых СОВПАДАЕТ
+;      марка провода/кабеля (WIRE) И статус (STATUS) - "тип прокладки
+;      не меняется", как и просил пользователь (сравнение WIRE уже
+;      само по себе разделяет ВЛ/КЛ, т.к. марки ВЛ и КЛ никогда не
+;      совпадают текстом).
+;   3. Для КАЖДОГО подходящего соседа поднимаем ЕГО ТЕКУЩУЮ группу
+;      целиком (LEP:FindGroupMembers по его LABELHANDLE) - это и есть
+;      правильный ответ на "а если сосед уже был частью большой уже
+;      объединённой группы": группа подхватывается целиком, а не
+;      только один сосед. Если новый пролёт совпал ОДНОВременно с
+;      левой И правой стороны (мостик между двумя старыми группами) -
+;      обе группы автоматически объединяются в одну, т.к. просто
+;      складываются в один общий список.
+;   4. Все старые подписи (по уникальным LABELHANDLE участников) -
+;      удаляются.
+;   5. Считается ИТОГОВАЯ длина для новой общей подписи - см. отдельно
+;      для ВЛ и КЛ ниже (RawTotal то же самое, что заменяет игра
+;      запаса/без запаса, о которой уже договорились).
+;   6. Крайние точки группы находятся через индекс вершины вдоль
+;      маршрута (LEP:GetNearestVertexIndex) - середина считается
+;      именно между ГЕОГРАФИЧЕСКИ крайними точками группы, а не как
+;      попало по порядку создания.
+;   7. Новая ОБЩАЯ подпись создаётся один раз (LEP:CreateSpanLabel),
+;      её LABELHANDLE прописывается ВСЕМ пролётам группы (включая
+;      новый) через LEP:SetSpanLabelHandle.
+;
+; ДЛИНА БЕЗ/С ЗАПАСОМ (по просьбе пользователя 2026-07-22):
+;   ВЛ - подпись показывает СЫРУЮ длину (сумма RAWLENGTH участников,
+;        БЕЗ запаса на провис) - запас на провис остаётся только в
+;        XDATA LENGTH/ведомости.
+;   КЛ - подпись ПО-ПРЕЖНЕМУ показывает длину С ЗАПАСОМ (+3м с каждой
+;        стороны у КАЖДОГО пролёта - "до дальнейших указаний", по
+;        прямому уточнению пользователя: запас на подъём кабеля на
+;        опору - это РЕАЛЬНАЯ физическая длина кабеля, а не просто
+;        "запас на закупку", в отличие от провиса ВЛ) - сумма уже
+;        готовых LENGTH участников (эти числа уже целые - округление
+;        не теряется).
+;
+; Verts - вершины маршрута, нужны, чтобы определить порядок пролётов
+; вдоль трассы (см. п.6 выше).
+;=====================================================================
+
+(defun LEP:FinalizeSpanLabel (SpanEnt Verts P1Handle P2Handle TypeCode WireName Status / Neighbors N MatchGroup AllMembers M OldHandles H OldEnt RawTotal LenTotal Pt Idx BestIdx BestPt WorstIdx WorstPt GroupFirst GroupLast NewLabelEnt NewLabelHandle DisplayLen)
+
+    (setq Neighbors
+        (append
+            (LEP:GetSpanNeighbors (LEP:GetDataValue SpanEnt "ROUTE") P1Handle SpanEnt)
+            (LEP:GetSpanNeighbors (LEP:GetDataValue SpanEnt "ROUTE") P2Handle SpanEnt)
+        )
+    )
+
+    ;; Оставляем только соседей с той же маркой и статусом ("тип
+    ;; прокладки не меняется").
+    (setq MatchGroup nil)
+    (foreach N Neighbors
+        (if (and (= (LEP:GetDataValue N "WIRE") WireName)
+                 (= (LEP:GetDataValue N "STATUS") Status)
+                 (not (member N MatchGroup))
+            )
+            (setq MatchGroup (append MatchGroup (list N)))
+        )
+    )
+
+    ;; Полный список участников итоговой группы: новый пролёт + ВСЕ
+    ;; участники текущих групп каждого подходящего соседа (не только
+    ;; сами соседи - см. п.3 в шапке функции).
+    (setq AllMembers (list SpanEnt))
+    (foreach N MatchGroup
+        (foreach M (LEP:FindGroupMembers (LEP:GetDataValue N "LABELHANDLE") (LEP:GetDataValue SpanEnt "ROUTE"))
+            (if (not (member M AllMembers))
+                (setq AllMembers (append AllMembers (list M)))
+            )
+        )
+        ;; На случай, если у соседа ЕЩЁ не было своего LABELHANDLE
+        ;; (не должно случаться для пролётов, созданных этой же
+        ;; версией кода, но подстраховка не помешает).
+        (if (not (member N AllMembers))
+            (setq AllMembers (append AllMembers (list N)))
+        )
+    )
+
+    ;; Удаляем все СТАРЫЕ подписи участников (уникальные хендлы -
+    ;; несколько участников уже объединённой группы делят один и тот
+    ;; же LABELHANDLE, удалять его дважды не нужно).
+    (setq OldHandles nil)
+    (foreach M AllMembers
+        (setq H (LEP:GetDataValue M "LABELHANDLE"))
+        (if (and H (not (member H OldHandles)))
+            (setq OldHandles (append OldHandles (list H)))
+        )
+    )
+    (foreach H OldHandles
+        (setq OldEnt (handent H))
+        (if OldEnt (entdel OldEnt))
+    )
+
+    ;; Итоговая длина - см. подробное обоснование в шапке функции.
+    (setq RawTotal 0.0)
+    (setq LenTotal 0)
+    (foreach M AllMembers
+        (setq RawTotal (+ RawTotal (atof (LEP:GetDataValue M "RAWLENGTH"))))
+        (setq LenTotal (+ LenTotal (atoi (LEP:GetDataValue M "LENGTH"))))
+    )
+    (if (= TypeCode "VL")
+        (setq DisplayLen (LEP:RoundUp RawTotal))
+        (setq DisplayLen LenTotal)
+    )
+
+    ;; Крайние точки группы - по индексу вершины вдоль маршрута
+    ;; (LEP:GetNearestVertexIndex), не по порядку создания пролётов.
+    (setq BestIdx nil)
+    (setq WorstIdx nil)
+    (foreach M AllMembers
+        (foreach Pt (LEP:GetSpanEndpoints M)
+            (setq Idx (LEP:GetNearestVertexIndex Verts Pt))
+            (if (or (not BestIdx) (< Idx BestIdx))
+                (progn (setq BestIdx Idx) (setq BestPt Pt))
+            )
+            (if (or (not WorstIdx) (> Idx WorstIdx))
+                (progn (setq WorstIdx Idx) (setq WorstPt Pt))
+            )
+        )
+    )
+    (setq GroupFirst BestPt)
+    (setq GroupLast WorstPt)
+
+    (setq NewLabelEnt (LEP:CreateSpanLabel (list GroupFirst GroupLast) WireName DisplayLen Status))
+    (setq NewLabelHandle (cdr (assoc 5 (entget NewLabelEnt))))
+
+    (foreach M AllMembers
+        (LEP:SetSpanLabelHandle M NewLabelHandle)
+    )
+)
+
+
+;=====================================================================
+; LEP:AddKLPoleNote
+;
+; Дописывает "+ подъём кабеля по опоре" в подпись опоры (PoleEnt) - по
+; просьбе пользователя 2026-07-22: если пролёт между двумя опорами -
+; КЛ, автоматически добавлять эту фразу к подписям ОБЕИХ опор (через
+; LEP:AppendMLeaderText, тот же приём, что уже используется для
+; "+ проект. ПУ" в LEP-END.LSP).
+;
+; ⚠️ Защита от дублирования: опора может стоять на стыке ДВУХ КЛ-
+; пролётов подряд (кабель идёт через неё насквозь) - тогда функция
+; вызовется для неё дважды, по разу от каждого соседнего пролёта.
+; Перед дописыванием проверяем текст ТЕКУЩЕЙ подписи опоры
+; (vl-string-search) - если фраза там уже есть, ничего не делаем.
+;=====================================================================
+
+(defun LEP:AddKLPoleNote (PoleEnt / LabelHandle LabelEnt LabelText)
+    (setq LabelHandle (LEP:GetDataValue PoleEnt "LABELHANDLE"))
+    (if LabelHandle
+        (progn
+            (setq LabelEnt (handent LabelHandle))
+            (if LabelEnt
+                (progn
+                    (setq LabelText (cdr (assoc 304 (entget LabelEnt))))
+                    (if (not (vl-string-search "подъём кабеля" LabelText))
+                        (LEP:AppendMLeaderText LabelEnt "+ подъём кабеля по опоре")
+                    )
+                )
+            )
+        )
+    )
+)
+
+
+;=====================================================================
+; LEP:FindRouteByID
+;
+; Находит ENAME полилинии маршрута по её ID (например "LEP_ROUTE_01") -
+; сканирует служебный слой маршрутов (*LEP-Layer-Route*), тот же приём
+; "временно включить слой на время поиска, если был выключен", что уже
+; используется в LEP:GetMaxRouteNumber/LEP:FindNearestRoute
+; (LEP-DATA.LSP/LEP-POLE.LSP) - слой маршрутов обычно скрыт
+; (LEP-ROUTEVIS), ssget без явного включения ничего бы на нём не увидел.
+;
+; ⚠️ ФИКС 2026-07-22 (по просьбе пользователя - убрать лишний клик по
+; маршруту в C:LEP-SPAN): раньше пользователь выбирал маршрут САМ
+; кликом (и для этого должен был не забыть включить LEP-ROUTEVIS) -
+; теперь C:LEP-SPAN находит маршрут САМ по ID, который уже хранится в
+; XDATA выбранной опоры (ключ ROUTE, LEP:AddPoleData) - видимость слоя
+; маршрута для этого поиска не имеет значения, эта функция сама
+; включает его на время сканирования и возвращает как было.
+;
+; Возвращает ename маршрута, либо nil, если трасса с таким ID не
+; найдена на чертеже.
+;=====================================================================
+
+(defun LEP:FindRouteByID (RouteID / LayerData WasOff SS i Ent Found)
+
+    (setq Found nil)
+
+    (setq LayerData (tblsearch "LAYER" *LEP-Layer-Route*))
+    (setq WasOff (and LayerData (< (cdr (assoc 62 LayerData)) 0)))
+    (if WasOff
+        (command "_.-layer" "_On" *LEP-Layer-Route* "")
+    )
+
+    (setq SS (ssget "_X" (list '(0 . "LWPOLYLINE") (cons 8 *LEP-Layer-Route*))))
+    (if SS
+        (progn
+            (setq i 0)
+            (repeat (sslength SS)
+                (setq Ent (ssname SS i))
+                (if (= (LEP:GetDataValue Ent "ID") RouteID)
+                    (setq Found Ent)
+                )
+                (setq i (1+ i))
+            )
+        )
+    )
+
+    (if (and WasOff (/= (getvar "CLAYER") *LEP-Layer-Route*))
+        (command "_.-layer" "_Off" *LEP-Layer-Route* "")
+    )
+
+    Found
+)
+
+
+;=====================================================================
+; LEP:FindRoutesThroughPoints
+;
+; ✅ ДОБАВЛЕНО 2026-07-22 (по просьбе пользователя). Находит ВСЕ
+; маршруты на чертеже, чья полилиния проходит РЯДОМ С ОБЕИМИ точками
+; P1/P2 (в пределах *LEP-Route-Detect-Tolerance*, LEP-CONFIG.LSP).
+;
+; ЗАЧЕМ: у опоры в XDATA записан ТОЛЬКО тот маршрут, которым её
+; СОЗДАЛИ (ключ ROUTE, LEP:AddPoleData) - навсегда. Если пользователь
+; позже проложил ВТОРОЙ маршрут ПОВЕРХ тех же опор (общий участок,
+; дальше расходятся - реальный сценарий: "от одной МТП идут в два
+; разных места отдельные фидеры"), опора об этом ничего не знает, и
+; LEP-SPAN, механически копируя ROUTE с опоры, отнёс бы новый пролёт
+; к маршруту 1 - независимо от того, что имел в виду пользователь.
+; Программа физически не может "догадаться" по данным опоры. Но
+; информация ЕСТЬ В ГЕОМЕТРИИ: полилиния маршрута 2 реально проходит
+; через эти точки - её и ищем.
+;
+; Слой маршрутов обычно СКРЫТ (LEP-ROUTEVIS) - временно включаем на
+; время сканирования и возвращаем как было, тот же приём, что в
+; LEP:FindRouteByID/LEP:GetMaxRouteNumber/LEP:FindNearestRoute.
+;
+; Расстояние от точки до полилинии считается через уже готовую
+; LEP:FindNearestSegment (LEP-POLE.LSP) - она возвращает ближайшую
+; точку НА линии, дальше обычный distance. Никакой новой геометрии.
+;
+; Возвращает список ename маршрутов-кандидатов (может быть пустым).
+;=====================================================================
+
+(defun LEP:FindRoutesThroughPoints (P1 P2 / LayerData WasOff SS i Ent Verts N1 N2 Result)
+
+    (setq Result nil)
+
+    (setq LayerData (tblsearch "LAYER" *LEP-Layer-Route*))
+    (setq WasOff (and LayerData (< (cdr (assoc 62 LayerData)) 0)))
+    (if WasOff
+        (command "_.-layer" "_On" *LEP-Layer-Route* "")
+    )
+
+    (setq SS (ssget "_X" (list '(0 . "LWPOLYLINE") (cons 8 *LEP-Layer-Route*))))
+
+    (if SS
+        (progn
+            (setq i 0)
+            (repeat (sslength SS)
+                (setq Ent (ssname SS i))
+                (setq Verts (LEP:GetVertices Ent))
+
+                ;; Полилиния меньше 2 вершин - вырожденная (см. защиту в
+                ;; C:LEP-ROUTE), LEP:FindNearestSegment на ней работать
+                ;; не сможет - пропускаем, а не падаем.
+                (if (>= (length Verts) 2)
+                    (progn
+                        (setq N1 (cadr (LEP:FindNearestSegment Verts P1)))
+                        (setq N2 (cadr (LEP:FindNearestSegment Verts P2)))
+                        (if (and (< (distance P1 N1) *LEP-Route-Detect-Tolerance*)
+                                 (< (distance P2 N2) *LEP-Route-Detect-Tolerance*)
+                            )
+                            (setq Result (append Result (list Ent)))
+                        )
+                    )
+                )
+                (setq i (1+ i))
+            )
+        )
+    )
+
+    (if (and WasOff (/= (getvar "CLAYER") *LEP-Layer-Route*))
+        (command "_.-layer" "_Off" *LEP-Layer-Route* "")
+    )
+
+    Result
+)
+
+
+;=====================================================================
+; LEP:ChooseRouteFromCandidates
+;
+; Выбор одного маршрута из нескольких кандидатов (см.
+; LEP:FindRoutesThroughPoints выше) - показывает их ID списком через
+; общую LEP:ChooseFromList (LEP-UTILS.LSP, тот же номерной выбор, что
+; и у марок провода/типов опор).
+;
+; Возвращает ename выбранного маршрута, либо nil при отмене (Enter).
+;=====================================================================
+
+(defun LEP:ChooseRouteFromCandidates (Candidates / ItemList Ent ID Choice i)
+
+    (setq ItemList nil)
+    (setq i 0)
+    (foreach Ent Candidates
+        (setq ID (LEP:GetDataValue Ent "ID"))
+        (if (not ID) (setq ID "БЕЗ_ID"))
+        ;; Значение пары - НОМЕР по порядку (строкой), а не сам ename:
+        ;; LEP:ChooseFromList возвращает пару целиком, ename достанем
+        ;; по этому номеру из исходного списка Candidates ниже.
+        (setq ItemList (append ItemList (list (cons ID (itoa i)))))
+        (setq i (1+ i))
+    )
+
+    (setq Choice (LEP:ChooseFromList ItemList "Через эти опоры проходит НЕСКОЛЬКО маршрутов - к какому отнести пролёт"))
+
+    (if Choice
+        (nth (atoi (cdr Choice)) Candidates)
+    )
+)
+
+
+;=====================================================================
+; LEP:GetSpanTypeCode
+;
+; "VL" или "KL" по СЛОЮ уже существующего пролёта - нужно для
+; C:LEP-SPAN-REPAIR ниже, где TypeCode неоткуда взять из диалога (в
+; отличие от C:LEP-SPAN - там он известен из только что заданного
+; вопроса "Тип прокладки"). В XDATA самого пролёта TypeCode отдельным
+; ключом не хранится (WIRE/SECTION хранят марку, а не VL/КЛ явно) -
+; зато слой у ВЛ и КЛ всегда разный, надёжный признак.
+;=====================================================================
+
+(defun LEP:GetSpanTypeCode (Ent / Lyr)
+    (setq Lyr (cdr (assoc 8 (entget Ent))))
+    (if (or (= Lyr *LEP-Layer-Proj-KL-GNB*)
+            (= Lyr *LEP-Layer-Proj-KL-Trench*)
+            (= Lyr *LEP-Layer-Exist-KL*)
+        )
+        "KL"
+        "VL"
+    )
+)
+
+
+;=====================================================================
+; LEP:FindSamePolePairSpans
+;
+; Находит ВСЕ уже существующие пролёты между ТОЙ ЖЕ парой опор
+; (P1Handle/P2Handle, в любом порядке) - неважно, какому маршруту они
+; принадлежат. Нужна для параллельного сдвига (см. шапку
+; *LEP-Span-ParallelOffset* в CONFIG): несколько проводов на одном и
+; том же участке (общие опоры двух маршрутов, или просто вторая марка
+; на том же маршруте) без сдвига легли бы точно друг на друга.
+;
+; Сканирует те же 4 слоя пролётов, что и LEP:GetSpanNeighbors выше -
+; но, в отличие от неё, требует совпадения ОБЕИХ опор сразу (не одной
+; любой стороны) - это другой признак: не "сосед по трассе", а
+; "буквально та же пара опор".
+;=====================================================================
+
+(defun LEP:FindSamePolePairSpans (P1Handle P2Handle / SS i Ent EntP1 EntP2 Result)
+
+    (setq Result nil)
+
+    (setq SS
+        (ssget "_X"
+            (list
+                '(0 . "LWPOLYLINE")
+                (cons 8
+                    (strcat
+                        *LEP-Layer-Proj-VL* "," *LEP-Layer-Exist-VL* ","
+                        *LEP-Layer-Proj-KL* "," *LEP-Layer-Exist-KL*
+                    )
+                )
+            )
+        )
+    )
+
+    (if SS
+        (progn
+            (setq i 0)
+            (repeat (sslength SS)
+                (setq Ent (ssname SS i))
+                (setq EntP1 (LEP:GetDataValue Ent "POLE1HANDLE"))
+                (setq EntP2 (LEP:GetDataValue Ent "POLE2HANDLE"))
+                (if (or (and (= EntP1 P1Handle) (= EntP2 P2Handle))
+                        (and (= EntP1 P2Handle) (= EntP2 P1Handle))
+                    )
+                    (setq Result (append Result (list Ent)))
+                )
+                (setq i (1+ i))
+            )
+        )
+    )
+
+    Result
+)
+
+
+;=====================================================================
+; LEP:GetParallelOffset
+;
+; Величина и знак сдвига (метры, со знаком) для N-го по счёту пролёта
+; на одной и той же паре опор (N = сколько таких пролётов уже
+; существует ДО этого нового - см. LEP:FindSamePolePairSpans выше).
+; Поочерёдно в разные стороны от центра, шаг *LEP-Span-ParallelOffset*
+; (по просьбе пользователя): N=0 (первый пролёт на этой паре опор) -
+; 0.0 (без сдвига, остаётся "на месте"); N=1 -> +1 шаг; N=2 -> -1 шаг;
+; N=3 -> +2 шага; N=4 -> -2 шага, и т.д. (нечётный N - сторона "+",
+; чётный - сторона "-"; число шагов = "потолок" N/2 - у нечётного и
+; чётного N это одно и то же целочисленное выражение (N+1)/2 при
+; целочисленном делении, отдельная ветка не нужна).
+;=====================================================================
+
+(defun LEP:GetParallelOffset (N / Steps Side)
+    (if (= N 0)
+        0.0
+        (progn
+            (setq Steps (/ (+ N 1) 2)) ; целочисленное деление - "потолок" N/2
+            (setq Side (if (= (rem N 2) 1) 1.0 -1.0))
+            (* Side Steps *LEP-Span-ParallelOffset*)
+        )
+    )
+)
+
+
+;=====================================================================
+; LEP:OffsetPointList
+;
+; Сдвигает КАЖДУЮ точку списка Pts перпендикулярно направлению P1->P2
+; на расстояние Dist (со знаком - в какую сторону, определяет знак).
+; Используется для параллельного разноса нескольких пролётов на одной
+; паре опор (см. *LEP-Span-ParallelOffset* в CONFIG) - весь путь
+; SubVerts (включая промежуточные изгибы, если есть) сдвигается как
+; единое целое, поэтому несколько параллельных линий остаются
+; читаемыми даже если исходная трасса не идеально прямая между этими
+; двумя опорами.
+;=====================================================================
+
+(defun LEP:OffsetPointList (Pts P1 P2 Dist / Dx Dy Len Nx Ny Pt Result)
+    (setq Result nil)
+    (if (= Dist 0.0)
+        Pts
+        (progn
+            (setq Dx (- (car P2) (car P1)))
+            (setq Dy (- (cadr P2) (cadr P1)))
+            (setq Len (distance P1 P2))
+            (if (< Len 1e-9)
+                Pts
+                (progn
+                    (setq Nx (/ (- Dy) Len))
+                    (setq Ny (/ Dx Len))
+                    (foreach Pt Pts
+                        (setq Result
+                            (append Result
+                                (list (list (+ (car Pt) (* Nx Dist)) (+ (cadr Pt) (* Ny Dist))))
+                            )
+                        )
+                    )
+                    Result
+                )
+            )
+        )
+    )
+)
+
+
 ;=====================================================================
 ; C:LEP-SPAN - основная команда
 ;
 ; Классификация одного или нескольких пролётов маршрута. Enter без
 ; точки (на первом клике пары) - выход из цикла.
+;
+; ✅ ФИКС 2026-07-22 (по просьбе пользователя): раньше команда СНАЧАЛА
+; спрашивала клик по полилинии маршрута (и для этого клика нужно было
+; не забыть включить LEP-ROUTEVIS, если слой скрыт) - хотя маршрут
+; опоры и так уже известен из её собственной XDATA (ROUTE). Теперь
+; трасса определяется САМА по ROUTE первой выбранной опоры
+; (LEP:FindRouteByID) - отдельный клик по линии маршрута и, как
+; следствие, необходимость включать LEP-ROUTEVIS перед запуском
+; C:LEP-SPAN - больше не нужны (сам LEP-ROUTEVIS как команда никак не
+; изменился, изменилось только то, что LEP-SPAN его больше не требует).
+;
+; ⚠️ НОВАЯ ПРОВЕРКА, которой не было даже у старой версии: если две
+; выбранные опоры оказались на РАЗНЫХ трассах (ROUTE не совпадает) -
+; переспрос "это Т-образное подключение веток?" (см. фикс v1.5), а не
+; молчаливое создание пролёта непонятно к чему. Раньше явного клика по
+; маршруту это не гарантировало вообще никак - код не проверял, что
+; обе кликнутые опоры реально принадлежат выбранной трассе.
+;
+; ✅ ФИКС 2026-07-22 (v1.7, по просьбе пользователя) - ГЕОМЕТРИЧЕСКОЕ
+; определение маршрута. Проблема, которую он описал: маршрут 2
+; проложен ПОВЕРХ уже существующих опор маршрута 1 (общий участок, где
+; висят два разных фидера, дальше расходятся) - опора в своей XDATA
+; помнит ТОЛЬКО маршрут 1 (тот, которым её создали), и LEP-SPAN,
+; механически копируя ROUTE с опоры, отнёс бы новые пролёты к маршруту
+; 1, что бы пользователь ни имел в виду. Теперь маршрут определяется
+; ГЕОМЕТРИЧЕСКИ (LEP:FindRoutesThroughPoints - какие полилинии реально
+; проходят через ОБЕ кликнутые опоры):
+;   1 кандидат  - берётся молча (обычный случай, поведение прежнее);
+;   несколько   - ОДИН вопрос со списком, ответ ЗАПОМИНАЕТСЯ до конца
+;                 сессии команды (следующие пролёты на неоднозначных
+;                 парах опор идут туда же, без переспроса);
+;   ноль        - откат на ROUTE опоры (как было).
+; Геометрия пролёта и класс напряжения берутся у ВЫБРАННОГО маршрута,
+; RouteID в XDATA пролёта - тоже его, поэтому вся остальная логика
+; (ведомость, объединение подписей, LEP-SPAN-REPAIR) работает дальше
+; сама, без единой правки.
+;
+; ⚠️ Опоры общего участка при этом ОСТАЮТСЯ за маршрутом 1 (их ROUTE
+; никто не переписывает) - осознанное решение: на общем участке
+; маршруту 2 нужен только ПРОВОД, сами опоры уже посчитаны в проекте 1
+; (или существующие). Если когда-нибудь понадобится иначе - это
+; отдельная задача, менять придётся XDATA самих опор.
 ;=====================================================================
- 
-(defun C:LEP-SPAN (/ Route RouteID VClass Verts P1 P2 Idx1 Idx2 SubVerts LineType WireList WireChoice
-                     LayerName LtName SpanEnt SpanLength RealLength DimDistance
-                     Status OldOs OldError LEP-CatchResult)
+
+(defun C:LEP-SPAN (/ Route RouteID RouteID2 VClass Verts P1 P2 P1Pt P1Ent P2Pt P2Ent P1Handle P2Handle
+                     Idx1 Idx2 SubVerts LineType WireList WireChoice MethodChoice Method
+                     LayerName LtName SpanEnt SpanLength RealLength DimDistance DataList
+                     Status OldOs OldError LEP-CatchResult TJunctionChoice IsCrossRoute
+                     ParallelN ParallelOffset RouteCandidates SessionRouteEnt)
 
     (setq OldError *error*)
     (defun *error* (msg)
@@ -433,58 +1155,162 @@
 
     (LEP:PrintHeader "Обработка пролётов и подписи")
 
-    (setq Route (car (entsel "\nВыберите полилинию маршрута (если не видна - включите LEP-ROUTEVIS): ")))
+    (setq OldOs (getvar "OSMODE"))
+    (setvar "OSMODE" 0)
 
-    (if Route
-        (progn
-            ;; ID трассы - записываем его же в XDATA каждого пролёта
-            ;; (ключ "ROUTE"), чтобы LEP-REPORT потом мог сгруппировать
-            ;; метраж провода/кабеля по трассам - раньше пролёты вообще
-            ;; не хранили, к какой трассе относятся (в отличие от опор).
-            ;; Если выбранный объект почему-то без ID (не наш маршрут,
-            ;; или старый объект без XDATA) - подстраховка, как и в
-            ;; LEP-POLE.LSP, чтобы strcat в LEP:SetData не упал на nil.
-            (setq RouteID (LEP:GetDataValue Route "ID"))
-            (if (not RouteID) (setq RouteID "LEP_ROUTE_UNKNOWN"))
+    (princ "\nДля каждого пролёта кликните ПО БЛОКУ первой опоры,")
+    (princ "\nзатем ПО БЛОКУ второй опоры этого пролёта.")
+    (princ "\nEnter вместо первой опоры - закончить.")
 
-            ;; Класс напряжения маршрута - выбран один раз при LEP-ROUTE,
-            ;; определяет, какой список марок ВЛ-провода предложить ниже
-            ;; (СИП-3 для 10кВ, СИП-2 для 0,4кВ - разные провода физически,
-            ;; путать нельзя, см. *LEP-WireTypes-VL-10*/-VL-04* в CONFIG).
-            (setq VClass (LEP:GetDataValue Route "VCLASS"))
+    (setq P1 (LEP:PickPole "\nПервая опора пролёта (Enter - закончить): "))
 
-            (setq Verts (LEP:GetVertices Route))
- 
-            (setq OldOs (getvar "OSMODE"))
-            (setvar "OSMODE" 0)
- 
-            (princ "\nДля каждого пролёта кликните ПО БЛОКУ первой опоры,")
-            (princ "\nзатем ПО БЛОКУ второй опоры этого пролёта.")
-            (princ "\nEnter вместо первой опоры - закончить.")
- 
-            (setq P1 (LEP:PickPole "\nПервая опора пролёта (Enter - закончить): "))
- 
-            (while P1
- 
-                (setq LEP-CatchResult
-                    (vl-catch-all-apply
-                        '(lambda ()
- 
-                            (setq P2 (LEP:PickPole "\nВторая опора пролёта: "))
+    (while P1
 
-                            (if P2
+        (setq LEP-CatchResult
+            (vl-catch-all-apply
+                '(lambda ()
+
+                    (setq P2 (LEP:PickPole "\nВторая опора пролёта: "))
+
+                    (if P2
+                        (progn
+                            (setq P1Pt (car P1)) (setq P1Ent (cdr P1))
+                            (setq P2Pt (car P2)) (setq P2Ent (cdr P2))
+                            (setq P1Handle (cdr (assoc 5 (entget P1Ent))))
+                            (setq P2Handle (cdr (assoc 5 (entget P2Ent))))
+
+                            ;; Маршрут - по ROUTE первой опоры (см. ФИКС
+                            ;; 2026-07-22 в шапке команды), со сверкой,
+                            ;; что вторая опора с ней согласна.
+                            (setq RouteID (LEP:GetDataValue P1Ent "ROUTE"))
+                            (setq RouteID2 (LEP:GetDataValue P2Ent "ROUTE"))
+                            (if (not RouteID) (setq RouteID "LEP_ROUTE_UNKNOWN"))
+                            (if (not RouteID2) (setq RouteID2 "LEP_ROUTE_UNKNOWN"))
+
+                            ;; ✅ ДОБАВЛЕНО 2026-07-22 (по замечанию пользователя): Т-образное
+                            ;; подключение веток - опора на трассе 2 подключается к уже
+                            ;; существующей опоре трассы 1, RouteID в этом случае РАЗНЫЙ у
+                            ;; двух опор ЗАКОННО, не по ошибке. Если трассы не совпали -
+                            ;; переспрашиваем, прежде чем отказывать.
+                            (if (/= RouteID RouteID2)
                                 (progn
-                                    ;; Находим ближайшие вершины маршрута к P1 и P2
-                                    (setq Idx1 (LEP:GetNearestVertexIndex Verts P1))
-                                    (setq Idx2 (LEP:GetNearestVertexIndex Verts P2))
+                                    (initget "Да Нет")
+                                    (setq TJunctionChoice
+                                        (getkword "\n[LEP-SPAN] Опоры на РАЗНЫХ трассах - это Т-образное подключение веток (не ошибка)? [Да/Нет] <Нет>: ")
+                                    )
+                                    (setq IsCrossRoute (= TJunctionChoice "Да"))
+                                )
+                                (setq IsCrossRoute nil)
+                            )
+
+                            (if (and (/= RouteID RouteID2) (not IsCrossRoute))
+                                (princ "\n[LEP-SPAN] Отменено - кликните обе опоры одного маршрута, либо подтвердите Т-образное подключение.")
+                                (progn
+                                    ;; ✅ ДОБАВЛЕНО 2026-07-22 (по просьбе пользователя):
+                                    ;; ГЕОМЕТРИЧЕСКОЕ определение маршрута. Раньше маршрут
+                                    ;; брался ТОЛЬКО из XDATA опоры (ROUTE) - а там записан
+                                    ;; тот маршрут, которым опору СОЗДАЛИ, навсегда. Если
+                                    ;; пользователь позже проложил ВТОРОЙ маршрут ПОВЕРХ тех
+                                    ;; же опор (общий участок двух фидеров, дальше расходятся) -
+                                    ;; опора об этом не знает, и пролёт молча уходил в маршрут 1.
+                                    ;; Теперь ищем ВСЕ маршруты, физически проходящие через
+                                    ;; ОБЕ кликнутые опоры (LEP:FindRoutesThroughPoints):
+                                    ;;   1 кандидат  - берём молча, ноль новых вопросов (это
+                                    ;;                 обычный случай, поведение не изменилось);
+                                    ;;   несколько   - ОДИН вопрос, и ответ ЗАПОМИНАЕТСЯ до
+                                    ;;                 конца сессии команды (SessionRouteEnt) -
+                                    ;;                 следующие пролёты на неоднозначных парах
+                                    ;;                 опор идут туда же без переспроса;
+                                    ;;   ноль        - откат на ROUTE опоры (старое поведение).
+                                    ;; ⚠️ При Т-образном подключении (IsCrossRoute) геометрия
+                                    ;; заведомо не даст осмысленного ответа (опоры на РАЗНЫХ
+                                    ;; трассах - маршрута, проходящего через обе, не существует
+                                    ;; вообще) - там сразу идём по ROUTE первой опоры, как и
+                                    ;; договаривались отдельно.
+                                    (setq Route nil)
+
+                                    (if (not IsCrossRoute)
+                                        (progn
+                                            (setq RouteCandidates (LEP:FindRoutesThroughPoints P1Pt P2Pt))
+
+                                            (cond
+                                                ((= (length RouteCandidates) 1)
+                                                 (setq Route (car RouteCandidates))
+                                                )
+                                                ((> (length RouteCandidates) 1)
+                                                 ;; Запомненный на эту сессию выбор - если он всё
+                                                 ;; ещё среди кандидатов для ЭТОЙ пары опор.
+                                                 (if (and SessionRouteEnt (member SessionRouteEnt RouteCandidates))
+                                                     (setq Route SessionRouteEnt)
+                                                     (progn
+                                                         (setq Route (LEP:ChooseRouteFromCandidates RouteCandidates))
+                                                         (if Route (setq SessionRouteEnt Route))
+                                                     )
+                                                 )
+                                                )
+                                            )
+                                        )
+                                    )
+
+                                    ;; Откат на старое поведение - маршрут по ROUTE опоры
+                                    ;; (Т-образное подключение, либо геометрия ничего не нашла).
+                                    (if (not Route)
+                                        (setq Route (LEP:FindRouteByID RouteID))
+                                    )
+
+                                    (if (not Route)
+                                        (princ (strcat "\n[LEP-SPAN] Не найдена полилиния трассы " RouteID " на чертеже - пропускаю."))
+                                        (progn
+                                    ;; RouteID - ПЕРЕОПРЕДЕЛЯЕМ по РЕАЛЬНО выбранному маршруту
+                                    ;; (он мог оказаться не тем, что записан в XDATA опоры -
+                                    ;; см. геометрическое определение выше). Именно этот ID
+                                    ;; уйдёт в XDATA пролёта, а значит и в ведомость, и в
+                                    ;; объединение подписей - вся остальная логика ниже
+                                    ;; работает без изменений.
+                                    (setq RouteID (LEP:GetDataValue Route "ID"))
+                                    (if (not RouteID) (setq RouteID "LEP_ROUTE_UNKNOWN"))
+
+                                    ;; Класс напряжения - у ВЫБРАННОГО маршрута (не у маршрута
+                                    ;; опоры): список марок провода должен соответствовать
+                                    ;; тому фидеру, который сейчас чертим.
+                                    (setq VClass (LEP:GetDataValue Route "VCLASS"))
+
+                                    ;; ⚠️ Т-образное подключение (IsCrossRoute) - опоры на
+                                    ;; РАЗНЫХ полилиниях, нет ЕДИНОЙ трассы, из вершин которой
+                                    ;; можно вырезать SubVerts. Подставляем "трассу из двух
+                                    ;; точек" (P1Pt, P2Pt) - вся нарезка ниже (Idx1/Idx2/
+                                    ;; SubList) на такой Verts естественно даёт SubVerts = сама
+                                    ;; прямая P1Pt-P2Pt, без отдельной ветки кода ниже.
+                                    (if IsCrossRoute
+                                        (setq Verts (list P1Pt P2Pt))
+                                        (setq Verts (LEP:GetVertices Route))
+                                    )
+
+                                    ;; Находим ближайшие вершины маршрута к P1Pt и P2Pt
+                                    (setq Idx1 (LEP:GetNearestVertexIndex Verts P1Pt))
+                                    (setq Idx2 (LEP:GetNearestVertexIndex Verts P2Pt))
 
                                     ;; Берём подсписок вершин между ними (по возрастанию индекса)
                                     (if (> Idx1 Idx2)
-                                        (progn (setq Idx1 (LEP:GetNearestVertexIndex Verts P2))
-                                               (setq Idx2 (LEP:GetNearestVertexIndex Verts P1)))
+                                        (progn (setq Idx1 (LEP:GetNearestVertexIndex Verts P2Pt))
+                                               (setq Idx2 (LEP:GetNearestVertexIndex Verts P1Pt)))
                                     )
                                     (setq SubVerts
                                         (LEP:SubList Verts Idx1 Idx2)
+                                    )
+
+                                    ;; ✅ ДОБАВЛЕНО 2026-07-22 (по просьбе пользователя): если
+                                    ;; между ЭТОЙ ЖЕ парой опор уже есть один или несколько
+                                    ;; пролётов (общий участок двух маршрутов, или просто
+                                    ;; вторая марка на одном маршруте) - без сдвига новая
+                                    ;; линия легла бы ТОЧНО поверх старой (та же геометрия),
+                                    ;; подписи - друг на друге. Сдвигаем перпендикулярно
+                                    ;; трассе, поочерёдно в разные стороны (см.
+                                    ;; LEP:GetParallelOffset/LEP:OffsetPointList выше).
+                                    (setq ParallelN (length (LEP:FindSamePolePairSpans P1Handle P2Handle)))
+                                    (setq ParallelOffset (LEP:GetParallelOffset ParallelN))
+                                    (if (/= ParallelOffset 0.0)
+                                        (setq SubVerts (LEP:OffsetPointList SubVerts P1Pt P2Pt ParallelOffset))
                                     )
 
                                     (if (< (length SubVerts) 2)
@@ -500,29 +1326,82 @@
 
                                             (if LineType
                                                 (progn
+                                                    ;; Статус - ПЕРЕД выбором слоя/способа прокладки КЛ
+                                                    ;; (⚠️ ФИКС 2026-07-22: раньше спрашивался ПОСЛЕ марки -
+                                                    ;; переставлено, т.к. выбор ГНБ/Траншея ниже нужен ТОЛЬКО
+                                                    ;; для Проект. КЛ, значит статус должен быть уже известен).
+                                                    (setq Status (LEP:GetStatus "пролёта"))
+
                                                     (if (= (cdr LineType) "VL")
                                                         (progn
-                                                            ;; СИП-3 - только для 10кВ (магистраль), СИП-2 -
-                                                            ;; только для 0,4кВ (низкое напряжение) - список
-                                                            ;; марок выбирается по классу МАРШРУТА, а не
-                                                            ;; предлагается общий на оба случая.
-                                                            (if (= VClass "10")
-                                                                (setq WireList *LEP-WireTypes-VL-10*)
-                                                                (setq WireList *LEP-WireTypes-VL-04*)
+                                                            ;; СИП-3 - для 10кВ и 6кВ (магистраль, разные
+                                                            ;; списки марок - см. *LEP-WireTypes-VL-6* в
+                                                            ;; CONFIG), СИП-2 - только для 0,4кВ (низкое
+                                                            ;; напряжение) - список марок выбирается по
+                                                            ;; классу МАРШРУТА, а не общий на все случаи.
+                                                            ;; ⚠️ ФИКС 2026-07-22: раньше был бинарный (if
+                                                            ;; VClass="10" ... иначе 04) - "6" молча попадал
+                                                            ;; бы в ветку 0,4кВ (СИП-2) как "любой не 10" -
+                                                            ;; теперь три явные ветки.
+                                                            (cond
+                                                                ((= VClass "10") (setq WireList *LEP-WireTypes-VL-10*))
+                                                                ((= VClass "6")  (setq WireList *LEP-WireTypes-VL-6*))
+                                                                (t               (setq WireList *LEP-WireTypes-VL-04*))
                                                             )
-                                                            (setq LayerName *LEP-Layer-Proj-VL*)
+                                                            ;; ✅ ДОБАВЛЕНО 2026-07-22: слой ВЛ теперь по
+                                                            ;; классу напряжения x статус (4 granular слоя,
+                                                            ;; см. LEP-CONFIG.LSP) - *LEP-Layer-Proj-VL*/
+                                                            ;; *LEP-Layer-Exist-VL* САМИ ПО СЕБЕ больше НЕ
+                                                            ;; годятся для вставки (это составная строка
+                                                            ;; "слой1,слой2" для сканирования, см. CONFIG).
+                                                            (if (= Status "PROJECT")
+                                                                (if (= VClass "04")
+                                                                    (setq LayerName *LEP-Layer-Proj-VL-04*)
+                                                                    (setq LayerName *LEP-Layer-Proj-VL-10*)
+                                                                )
+                                                                (if (= VClass "04")
+                                                                    (setq LayerName *LEP-Layer-Exist-VL-04*)
+                                                                    (setq LayerName *LEP-Layer-Exist-VL-10*)
+                                                                )
+                                                            )
                                                             (setq LtName "CONTINUOUS")
+                                                            (setq Method nil)
                                                         )
                                                         (progn
                                                             ;; КЛ рисуется ТАК ЖЕ, как ВЛ - сплошной линией,
                                                             ;; никакого своего типа линии со штампом "K"
                                                             ;; больше нет (убрано по просьбе пользователя
                                                             ;; 2026-07-15 - см. LEP-README.md). Отличие КЛ
-                                                            ;; от ВЛ на чертеже - только слой/цвет
-                                                            ;; (*LEP-Layer-Proj-KL*, синий).
+                                                            ;; от ВЛ на чертеже - слой/цвет.
                                                             (setq WireList *LEP-WireTypes-KL*)
-                                                            (setq LayerName *LEP-Layer-Proj-KL*)
                                                             (setq LtName "CONTINUOUS")
+
+                                                            ;; ✅ ДОБАВЛЕНО 2026-07-22 (по просьбе пользователя):
+                                                            ;; способ прокладки (ГНБ/Траншея) - ТОЛЬКО для
+                                                            ;; Проект. КЛ (Сущ. КЛ уже проложена каким-то
+                                                            ;; способом де-факто, спрашивать не о чем - остаётся
+                                                            ;; на старом едином слое существующих КЛ).
+                                                            (if (= Status "PROJECT")
+                                                                (progn
+                                                                    (setq MethodChoice
+                                                                        (LEP:ChooseFromList
+                                                                            (list (cons "ГНБ" "GNB") (cons "Траншея" "TRENCH"))
+                                                                            "Способ прокладки КЛ"
+                                                                        )
+                                                                    )
+                                                                    (setq Method (if MethodChoice (cdr MethodChoice) "TRENCH"))
+                                                                    (setq LayerName
+                                                                        (if (= Method "GNB")
+                                                                            *LEP-Layer-Proj-KL-GNB*
+                                                                            *LEP-Layer-Proj-KL-Trench*
+                                                                        )
+                                                                    )
+                                                                )
+                                                                (progn
+                                                                    (setq Method nil)
+                                                                    (setq LayerName *LEP-Layer-Exist-KL*)
+                                                                )
+                                                            )
                                                         )
                                                     )
 
@@ -531,25 +1410,42 @@
 
                                                     (if WireChoice
                                                         (progn
-                                                            (setq Status (LEP:GetStatus "пролёта"))
-
                                                             (setq SpanEnt (LEP:CreateSpanEntity SubVerts LayerName LtName))
+
+                                                            ;; ✅ ДОБАВЛЕНО 2026-07-22 (по прямому замечанию
+                                                            ;; пользователя): толщина линии по статусу (Проект.
+                                                            ;; жирнее Сущ.) - раньше была только у символа опоры
+                                                            ;; (LEP:InsertPoleSymbol, LEP-POLESYM.LSP), у пролётов
+                                                            ;; группа DXF 370 не выставлялась вообще - все пролёты
+                                                            ;; были одинаковой (дефолтной) толщины независимо от
+                                                            ;; статуса. Переиспользует ту же общую функцию и те же
+                                                            ;; константы (*LEP-LWeight-Proj*/*LEP-LWeight-Exist*),
+                                                            ;; что и у опор - для единообразия чертежа.
+                                                            (if (= Status "EXIST")
+                                                                (LEP:SetEntityLWeight SpanEnt *LEP-LWeight-Exist*)
+                                                                (LEP:SetEntityLWeight SpanEnt *LEP-LWeight-Proj*)
+                                                            )
 
                                                             ;; SpanLength - геометрический путь вдоль трассы (может
                                                             ;; не совпадать с прямым расстоянием P1-P2, если между
-                                                            ;; опорами есть изгиб без опоры) - основа для расчёта
-                                                            ;; РЕАЛЬНОЙ длины материала с запасом (RealLength).
+                                                            ;; опорами есть изгиб без опоры) - "сырая" длина БЕЗ
+                                                            ;; запаса, основа и для RealLength (ведомость), и для
+                                                            ;; подписи ВЛ без запаса (LEP:FinalizeSpanLabel).
                                                             ;; DimDistance - ПРЯМОЕ расстояние между самими опорами,
                                                             ;; для размерной линии - отдельная величина, см. шапки
                                                             ;; LEP:GetRealLength / LEP:CreateSpanDimension выше.
                                                             (setq SpanLength (LEP:GetSpanLength SubVerts))
                                                             (setq RealLength (LEP:GetRealLength (cdr LineType) SpanLength))
-                                                            (setq DimDistance (LEP:RoundNearest (distance P1 P2)))
+                                                            (setq DimDistance (LEP:RoundNearest (distance P1Pt P2Pt)))
 
                                                             ;; Данные для ведомости: трасса, статус, марка, сечение,
-                                                            ;; РЕАЛЬНАЯ длина с запасом (не сырое расстояние) - чтобы
-                                                            ;; ведомость и подпись на чертеже показывали одно и то же.
-                                                            (LEP:SetData SpanEnt
+                                                            ;; РЕАЛЬНАЯ длина с запасом (LENGTH, не сырое расстояние) -
+                                                            ;; ведомость всегда с запасом, независимо от того, что
+                                                            ;; показывает подпись на чертеже (см. RAWLENGTH/
+                                                            ;; LEP:FinalizeSpanLabel - только ВЛ на чертеже теряет
+                                                            ;; запас, ведомость - никогда). POLE1HANDLE/POLE2HANDLE -
+                                                            ;; для поиска соседних пролётов при объединении подписей.
+                                                            (setq DataList
                                                                 (list
                                                                     (cons "TYPE" "SPAN")
                                                                     (cons "ROUTE" RouteID)
@@ -557,45 +1453,200 @@
                                                                     (cons "WIRE" (car WireChoice))
                                                                     (cons "SECTION" (cdr WireChoice))
                                                                     (cons "LENGTH" (itoa RealLength))
+                                                                    (cons "RAWLENGTH" (rtos SpanLength 2 3))
+                                                                    (cons "POLE1HANDLE" P1Handle)
+                                                                    (cons "POLE2HANDLE" P2Handle)
                                                                 )
                                                             )
+                                                            (if Method
+                                                                (setq DataList (append DataList (list (cons "METHOD" Method))))
+                                                            )
+                                                            (LEP:SetData SpanEnt DataList)
 
-                                                            (LEP:CreateSpanLabel SubVerts (car WireChoice) RealLength Status)
-                                                            (LEP:CreateSpanDimension P1 P2 DimDistance)
+                                                            ;; Подпись - объединяется с соседними пролётами той же
+                                                            ;; марки/статуса автоматически (LEP:FinalizeSpanLabel,
+                                                            ;; см. её подробную шапку выше в этом файле).
+                                                            (LEP:FinalizeSpanLabel SpanEnt Verts P1Handle P2Handle (cdr LineType) (car WireChoice) Status)
+
+                                                            ;; ✅ ФИКС 2026-07-22: размерная линия (прямое расстояние
+                                                            ;; опора-опора) показывает ГЕОМЕТРИЮ, которая ОДНА И ТА
+                                                            ;; ЖЕ для всех параллельных проводов между этой парой опор -
+                                                            ;; рисуем её только у ПЕРВОГО пролёта на этой паре
+                                                            ;; (ParallelN=0), иначе несколько одинаковых по числу
+                                                            ;; размерных линий друг на друге - чистый мусор.
+                                                            (if (= ParallelN 0)
+                                                                (LEP:CreateSpanDimension P1Pt P2Pt DimDistance)
+                                                            )
+
+                                                            ;; "+ подъём кабеля по опоре" на ОБЕИХ опорах КЛ-пролёта
+                                                            ;; (по просьбе пользователя 2026-07-22).
+                                                            (if (= (cdr LineType) "KL")
+                                                                (progn
+                                                                    (LEP:AddKLPoleNote P1Ent)
+                                                                    (LEP:AddKLPoleNote P2Ent)
+                                                                )
+                                                            )
                                                         )
                                                     )
                                                 )
                                             )
                                         )
-                                    )
-                                )
-                            )
-                        )
-                     '())
-                )
- 
-                (if (vl-catch-all-error-p LEP-CatchResult)
-                    (princ
-                        (strcat
-                            "\n[LEP-SPAN] Ошибка на этом пролёте, пропускаю и продолжаю: "
-                            (vl-catch-all-error-message LEP-CatchResult)
-                        )
-                    )
-                )
- 
-                (setq P1 (LEP:PickPole "\nПервая опора пролёта (Enter - закончить): "))
-            )
- 
-            (setvar "OSMODE" OldOs)
+                                    ) ; закрывает "if (< (length SubVerts) 2)"
+                                    ) ; закрывает NEW-2 (progn "маршрут найден")
+                                ) ; закрывает "if (not Route)"
+                            ) ; закрывает NEW-1 (progn "трассы совпали")
+                        ) ; закрывает "if (/= RouteID RouteID2)"
+                    ) ; закрывает A (progn "if P2" then-ветка)
+                ) ; закрывает "if P2"
+            ) ; закрывает лямбду vl-catch-all-apply
+             '())
         )
-        (princ "\nМаршрут не выбран.")
+
+        (if (vl-catch-all-error-p LEP-CatchResult)
+            (princ
+                (strcat
+                    "\n[LEP-SPAN] Ошибка на этом пролёте, пропускаю и продолжаю: "
+                    (vl-catch-all-error-message LEP-CatchResult)
+                )
+            )
+        )
+
+        (setq P1 (LEP:PickPole "\nПервая опора пролёта (Enter - закончить): "))
     )
- 
+
+    (setvar "OSMODE" OldOs)
+
     (setq *error* OldError)
     (LEP:PrintFooter)
     (princ)
 )
  
  
-(princ "\nLEP-SPAN v0.5 загружен (клик только по настоящей опоре, не по откосу).")
+;=====================================================================
+; C:LEP-SPAN-REPAIR - "чинилка" подписей пролётов
+;
+; ✅ ДОБАВЛЕНО 2026-07-22, по просьбе пользователя. Проблема: подпись
+; пролёта теперь может быть ОБЩЕЙ на несколько пролётов одной марки
+; (LEP:FinalizeSpanLabel, объединение подписей). Если пользователь
+; стирает пролёт ВРУЧНУЮ обычной командой AutoCAD `ERASE` (рамкой или
+; секущей рамкой, а не отдельной командой удаления пролёта - её в
+; проекте пока нет) и рамка заодно зацепила саму подпись - у ОСТАВШИХСЯ
+; пролётов группы `LABELHANDLE` начинает указывать на уже стёртый
+; объект. Подпись у них пропадает целиком, хотя сами пролёты никто не
+; трогал (подтверждено пользователем: "удалил командой erase").
+;
+; Эта команда сканирует ВСЕ пролёты на чертеже (все трассы разом - "по
+; маршрутам", не по одному) и для каждого проверяет: резолвится ли его
+; `LABELHANDLE` в реально существующий объект (`handent`). Если нет
+; (поле пустое, или объект стёрт) - пролёт "голый", нужно чинить.
+;
+; ПОЧИНКА - переиспользует LEP:FinalizeSpanLabel ЦЕЛИКОМ, без
+; дублирования логики объединения: у "голого" пролёта уже есть вся
+; нужная информация в его собственной XDATA (POLE1HANDLE/POLE2HANDLE/
+; WIRE/STATUS/ROUTE) - функции всё равно, был ли пролёт только что
+; создан командой LEP-SPAN, или существовал давно и просто "осиротел".
+; Она сама найдёт соседей, подхватит их текущие (тоже, возможно,
+; осиротевшие - см. ниже) группы через LEP:FindGroupMembers, удалит
+; всё что найдёт по старым хендлам (если те ещё существуют - если нет,
+; просто пропустит удаление, ничего не сломается) и поставит одну
+; новую подпись на всех.
+;
+; ⚠️ Если "голых" пролётов в одной группе НЕСКОЛЬКО (весь предыдущий
+; общий label был стёрт разом) - после починки ПЕРВОГО пролёта в цикле
+; вся группа получает новый LABELHANDLE, поэтому остальные пролёты той
+; же группы, дойдя до них в цикле, уже окажутся "не голыми" и будут
+; корректно пропущены - двойной работы не происходит.
+;
+; ⚠️ ЧЕГО ЭТА КОМАНДА НЕ ЧИНИТ (честно, по обсуждению с пользователем):
+; если пролёт заменили на другую марку/тип, но СТАРУЮ общую подпись
+; соседей не стёрли - она физически ВСЁ ЕЩЁ СУЩЕСТВУЕТ (просто
+; показывает уже неверную суммарную длину/положение). `handent` для
+; неё вернёт валидный объект, значит с точки зрения этой команды
+; пролёт "не голый", чинить нечего - такую, ВИЗУАЛЬНО присутствующую,
+; но текстово неверную подпись пользователю придётся стереть руками
+; самому (это уже проговорено и принято - "что-то надо и ручками
+; делать").
+;=====================================================================
+
+(defun C:LEP-SPAN-REPAIR (/ SS i Ent LabelHandle RouteID P1Handle P2Handle WireName Status
+                            TypeCode RouteCache RouteEntry Route Verts Count)
+
+    (LEP:PrintHeader "Проверка и восстановление подписей пролётов")
+
+    (setq Count 0)
+    (setq RouteCache nil) ; ((RouteID . (Route . Verts)) ...) - не сканировать слой маршрутов заново на каждый пролёт одной трассы
+
+    (setq SS
+        (ssget "_X"
+            (list
+                '(0 . "LWPOLYLINE")
+                (cons 8
+                    (strcat
+                        *LEP-Layer-Proj-VL* "," *LEP-Layer-Exist-VL* ","
+                        *LEP-Layer-Proj-KL* "," *LEP-Layer-Exist-KL*
+                    )
+                )
+            )
+        )
+    )
+
+    (if SS
+        (progn
+            (setq i 0)
+            (repeat (sslength SS)
+                (setq Ent (ssname SS i))
+                (setq LabelHandle (LEP:GetDataValue Ent "LABELHANDLE"))
+
+                ;; "Голый" пролёт - LABELHANDLE отсутствует вообще, либо
+                ;; указывает на уже стёртый объект (handent вернёт nil).
+                (if (or (not LabelHandle) (not (handent LabelHandle)))
+                    (progn
+                        (setq RouteID    (LEP:GetDataValue Ent "ROUTE"))
+                        (setq P1Handle   (LEP:GetDataValue Ent "POLE1HANDLE"))
+                        (setq P2Handle   (LEP:GetDataValue Ent "POLE2HANDLE"))
+                        (setq WireName   (LEP:GetDataValue Ent "WIRE"))
+                        (setq Status     (LEP:GetDataValue Ent "STATUS"))
+
+                        (if (and RouteID P1Handle P2Handle WireName Status)
+                            (progn
+                                (setq RouteEntry (assoc RouteID RouteCache))
+                                (if RouteEntry
+                                    (setq Verts (cdr (cdr RouteEntry)))
+                                    (progn
+                                        (setq Route (LEP:FindRouteByID RouteID))
+                                        (if Route
+                                            (progn
+                                                (setq Verts (LEP:GetVertices Route))
+                                                (setq RouteCache (append RouteCache (list (cons RouteID (cons Route Verts)))))
+                                            )
+                                            (setq Verts nil)
+                                        )
+                                    )
+                                )
+
+                                (if Verts
+                                    (progn
+                                        (setq TypeCode (LEP:GetSpanTypeCode Ent))
+                                        (LEP:FinalizeSpanLabel Ent Verts P1Handle P2Handle TypeCode WireName Status)
+                                        (setq Count (1+ Count))
+                                    )
+                                    (princ (strcat "\n[LEP-SPAN-REPAIR] Не найдена трасса " RouteID " для одного из пролётов - пропускаю."))
+                                )
+                            )
+                            (princ "\n[LEP-SPAN-REPAIR] У пролёта не хватает данных (старый пролёт без POLE1HANDLE/POLE2HANDLE - создан до этой правки?) - пропускаю.")
+                        )
+                    )
+                )
+                (setq i (1+ i))
+            )
+        )
+    )
+
+    (princ (strcat "\n[LEP-SPAN-REPAIR] Восстановлено подписей: " (itoa Count)))
+    (LEP:PrintFooter)
+    (princ)
+)
+
+
+(princ "\nLEP-SPAN v1.7 загружен (геометрическое определение маршрута, параллельный сдвиг проводов, Т-образное подключение, LEP-SPAN-REPAIR).")
 (princ)

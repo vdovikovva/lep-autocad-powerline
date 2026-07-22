@@ -2,7 +2,25 @@
 ;
 ;   ПРОЕКТ:      LEP
 ;   ФАЙЛ:        LEP-END.LSP
-;   ВЕРСИЯ:      0.7  (выбор мощности МТП - *LEP-MTP-Types*, Claude,
+;   ВЕРСИЯ:      1.0  (2026-07-22: КТП - новый пункт меню, наземная
+;                подстанция БЕЗ опоры, свой блок-символ (LEP-KTPSYM.LSP,
+;                прямоугольник+треугольник ОДНИМ объектом - переделано
+;                из двух независимых объектов по прямой правке
+;                пользователя после показанного скриншота, заодно
+;                треугольник растянут на всю высоту прямоугольника),
+;                номер/мощность/марка - свободный ввод, три строки
+;                подписи; учтена в ведомости (ЭТАП 2.6, LEP-REPORT.LSP) -
+;                Claude)
+;   0.9  (2026-07-22: СТП - новый пункт меню, одна опора +
+;                "+ СТП-XX кВА" второй строкой (как ПУ, текстом, без
+;                отдельной графики - пока); подпись МТП теперь
+;                указывает на середину между 2-й и 3-й опорой (там
+;                физически висит трансформатор), а не на саму опору 2 -
+;                Claude)
+;   0.8  (LEP:InsertPole получил VClass - слой опоры по
+;                классу напряжения, см. LEP-POLE.LSP/LEP-CONFIG.LSP -
+;                Claude, 2026-07-22)
+;   0.7  (выбор мощности МТП - *LEP-MTP-Types*, Claude,
 ;                2026-07-16)
 ;   0.6  (третий пункт "ПУ на существующую опору" - без
 ;                новой геометрии, дописывает строку в готовую подпись,
@@ -103,6 +121,45 @@
 
 
 ;=====================================================================
+; LEP:CreateKtpLabel
+;
+; Подпись-выноска КТП (2026-07-22) - ТРИ строки, формат по референсу
+; пользователя: "[статус]. КТП-[номер]" / "[мощность]/[класс маршрута]/
+; 0,4 кВ" / "[марка трансформатора]" (номер/мощность/марка - свободный
+; ввод, см. C:LEP-END). НЕ переиспользует LEP:CreatePoleLabel - у той
+; первая строка жёстко "оп. [тип]", здесь другой формат ("КТП-...").
+;=====================================================================
+
+(defun LEP:CreateKtpLabel (Point Status Number Power VClass Marka / StatusText Line1 Line2 LabelText TextPoint LabelEnt)
+
+    (if (= Status "EXIST")
+        (setq StatusText "Сущ.")
+        (setq StatusText "Проект.")
+    )
+
+    (setq Line1 (strcat StatusText " КТП-" Number))
+    (setq Line2 (strcat (rtos Power 2 0) "/" VClass "/0,4 кВ"))
+
+    (setq LabelText (strcat Line1 "\\P" Line2 "\\P" Marka))
+
+    (setq TextPoint
+        (list
+            (+ (car Point) *LEP-LeaderOffset*)
+            (+ (cadr Point) *LEP-LeaderOffset*)
+        )
+    )
+
+    (command "_.MLEADER" Point TextPoint LabelText)
+    (setq LabelEnt (entlast))
+
+    (LEP:SetMLeaderBackgroundMask LabelEnt)
+    (LEP:BringToFront LabelEnt)
+
+    LabelEnt
+)
+
+
+;=====================================================================
 ; C:LEP-END - основная команда
 ;
 ; ОДНА концовка за запуск (без цикла): выбор типа (ПУ/МТП) -> клик
@@ -111,9 +168,10 @@
 ; (крайне редкий случай) - просто запустить LEP-END снова.
 ;=====================================================================
 
-(defun C:LEP-END (/ Route RouteID Choice EndType Status ClickPoint InsertResult
-                    Pt1 Pt2 Pt3 Rotation RouteDir RouteVerts Ent1 Ent2 Ent3 OldOs OldError
-                    ExistPoleEnt LabelHandle LabelEnt MtpChoice MtpLabel)
+(defun C:LEP-END (/ Route RouteID VClass Choice EndType Status ClickPoint InsertResult
+                    Pt1 Pt2 Pt3 MtpMidPt Rotation RouteDir RouteVerts Ent1 Ent2 Ent3 OldOs OldError
+                    ExistPoleEnt LabelHandle LabelEnt MtpChoice MtpLabel StpChoice StpLabel
+                    KtpNumber KtpPower KtpMarka)
 
     (setq OldError *error*)
     (defun *error* (msg)
@@ -138,6 +196,8 @@
             (list
                 (cons "ПУ (0,4 кВ - 1 опора)" "PU")
                 (cons "МТП (10 кВ - 3 опоры: РЛК/МТП/ЩУ)" "MTP")
+                (cons "СТП (трансформатор на ОДНОЙ опоре)" "STP")
+                (cons "КТП (наземная подстанция, без опоры)" "KTP")
                 (cons "ПУ на СУЩЕСТВУЮЩУЮ опору (без новой опоры)" "PU_EXIST")
             )
             "Тип оконечного оборудования (Enter - отмена)"
@@ -209,6 +269,11 @@
                             (setq RouteID (LEP:GetDataValue Route "ID"))
                             (if (not RouteID) (setq RouteID "LEP_ROUTE_UNKNOWN"))
 
+                            ;; ✅ ДОБАВЛЕНО 2026-07-22: класс напряжения маршрута -
+                            ;; нужен LEP:InsertPole ниже, чтобы выбрать нужный из
+                            ;; 4 granular слоёв опор (см. LEP-CONFIG.LSP/LEP-POLE.LSP).
+                            (setq VClass (LEP:GetDataValue Route "VCLASS"))
+
                             ;; Статус - ОДИН раз на весь блок (как и тип), см.
                             ;; ФИКС 2026-07-15 в шапке файла - существующее
                             ;; оконечное оборудование тоже бывает.
@@ -223,6 +288,28 @@
                                 (progn
                                     (setq MtpChoice (LEP:ChooseFromList *LEP-MTP-Types* "Тип МТП (мощность/ВН/НН)"))
                                     (setq MtpLabel (if MtpChoice (cdr MtpChoice) *LEP-Label-MTP*))
+                                )
+                            )
+
+                            ;; ✅ ДОБАВЛЕНО 2026-07-22: выбор мощности СТП - только для
+                            ;; СТП, аналогично мощности МТП выше.
+                            (if (= EndType "STP")
+                                (progn
+                                    (setq StpChoice (LEP:ChooseFromList *LEP-STP-Types* "Мощность СТП"))
+                                    (setq StpLabel (if StpChoice (cdr StpChoice) (car (car *LEP-STP-Types*))))
+                                )
+                            )
+
+                            ;; ✅ ДОБАВЛЕНО 2026-07-22: данные КТП - СВОБОДНЫЙ ввод
+                            ;; (номер/мощность/марка), фиксированного списка нет
+                            ;; (в отличие от МТП/СТП выше) - пользователь: "нет
+                            ;; живых примеров из жизни чтоб допилить" список.
+                            (if (= EndType "KTP")
+                                (progn
+                                    (setq KtpNumber (getstring T "\nНомер КТП (например 5766): "))
+                                    (initget 6) ; запрет нуля и отрицательных
+                                    (setq KtpPower (getreal "\nМощность КТП, кВА: "))
+                                    (setq KtpMarka (getstring T "\nМарка трансформатора (например ТМГ-160): "))
                                 )
                             )
 
@@ -257,7 +344,15 @@
                                         (setq RouteDir (+ RouteDir pi))
                                     )
 
-                                    (setq Ent1 (LEP:InsertPole Pt1 Rotation *LEP-End-PoleType* Status))
+                                    ;; ✅ ДОБАВЛЕНО 2026-07-22: КТП - НЕ опора, свой
+                                    ;; блок-символ (прямоугольник+треугольник ОДНИМ
+                                    ;; объектом, см. LEP-KTPSYM.LSP) вместо трапеции.
+                                    ;; Rotation для неё не используется (символ КТП
+                                    ;; не разворачивается по направлению маршрута).
+                                    (if (= EndType "KTP")
+                                        (setq Ent1 (LEP:InsertKtpSymbol Pt1 Status))
+                                        (setq Ent1 (LEP:InsertPole Pt1 Rotation *LEP-End-PoleType* Status VClass))
+                                    )
                                     (command "_.GEOMCONSTRAINT" "_COincident" Ent1 Pt1 Route Pt1 "")
 
                                     ;; ⚠️ Страховка (см. LEP-POLE.LSP) - пустой (command)
@@ -266,58 +361,109 @@
                                     ;; портить остаток команды (опоры 2/3, подписи).
                                     (command)
 
-                                    (if (= EndType "PU")
+                                    (cond
 
-                                        (progn
-                                            (LEP:CreatePoleLabel Pt1 *LEP-End-PoleType* Status *LEP-Label-PU* *LEP-Label-Angle-Default*)
-                                            (LEP:AddEquipData Ent1 RouteID *LEP-End-PoleType* "PU" Status)
-                                            (princ "\n[LEP-END] Установлена опора с ПУ.")
+                                        ((= EndType "PU")
+                                            (progn
+                                                (LEP:CreatePoleLabel Pt1 *LEP-End-PoleType* Status *LEP-Label-PU* *LEP-Label-Angle-Default*)
+                                                (LEP:AddEquipData Ent1 RouteID *LEP-End-PoleType* "PU" Status)
+                                                (princ "\n[LEP-END] Установлена опора с ПУ.")
+                                            )
                                         )
 
-                                        (progn
-                                            ;; Опора 1 (уже вставлена выше) - РЛК. Три
-                                            ;; подписи блока МТП разведены в РАЗНЫЕ
-                                            ;; стороны (веером) - опоры стоят близко
-                                            ;; друг к другу (шаг 3м/2м), при одинаковом
-                                            ;; направлении подписи накладывались друг на
-                                            ;; друга (замечено пользователем на тесте).
-                                            (LEP:CreatePoleLabel Pt1 *LEP-End-PoleType* Status *LEP-Label-RLK* *LEP-End-LabelAngle-RLK*)
-                                            (LEP:AddEquipData Ent1 RouteID *LEP-End-PoleType* "RLK" Status)
-
-                                            ;; Опора 2 (МТП) - дальше ПО НАПРАВЛЕНИЮ
-                                            ;; МАРШРУТА (RouteDir, НЕ Rotation - см.
-                                            ;; фикс №1 в шапке файла) на
-                                            ;; *LEP-End-MTP-Spacing1* м. НЕ проекция на
-                                            ;; маршрут - это уже за пределами
-                                            ;; нарисованной полилинии.
-                                            (setq Pt2
-                                                (list
-                                                    (+ (car Pt1) (* *LEP-End-MTP-Spacing1* (cos RouteDir)))
-                                                    (+ (cadr Pt1) (* *LEP-End-MTP-Spacing1* (sin RouteDir)))
-                                                )
+                                        ;; ✅ ДОБАВЛЕНО 2026-07-22: СТП - трансформатор на ОДНОЙ
+                                        ;; опоре (не 3, как МТП). Опора ставится ТЕМ ЖЕ способом,
+                                        ;; что и ПУ выше (Ent1 уже вставлен) - подпись как у
+                                        ;; обычной опоры + вторая строка "+ СТП-XX кВА"
+                                        ;; (ClassLabel-параметр LEP:CreatePoleLabel - тот же
+                                        ;; механизм, что обычно несёт класс напряжения маршрута,
+                                        ;; здесь вместо него - мощность СТП, по прямой просьбе
+                                        ;; пользователя). Данные для ведомости - StpLabel целиком
+                                        ;; в EQUIP, тем же приёмом, что и у МТП (разные мощности -
+                                        ;; разные строки в ведомости).
+                                        ((= EndType "STP")
+                                            (progn
+                                                (LEP:CreatePoleLabel Pt1 *LEP-End-PoleType* Status (strcat "+ " StpLabel) *LEP-Label-Angle-Default*)
+                                                (LEP:AddEquipData Ent1 RouteID *LEP-End-PoleType* StpLabel Status)
+                                                (princ "\n[LEP-END] Установлена опора со СТП.")
                                             )
-                                            (setq Ent2 (LEP:InsertPole Pt2 Rotation *LEP-End-PoleType* Status))
-                                            ;; MtpLabel - выбранная мощность (2026-07-16), не
-                                            ;; общий фиксированный *LEP-Label-MTP* - записывается
-                                            ;; целиком как EQUIP, чтобы разные МТП по мощности не
-                                            ;; слились в одну строку в ведомости (см. LEP-CONFIG.LSP,
-                                            ;; *LEP-MTP-Types*, и LEP:GetEquipLabel в LEP-REPORT.LSP).
-                                            (LEP:CreatePoleLabel Pt2 *LEP-End-PoleType* Status MtpLabel *LEP-End-LabelAngle-MTP*)
-                                            (LEP:AddEquipData Ent2 RouteID *LEP-End-PoleType* MtpLabel Status)
+                                        )
 
-                                            ;; Опора 3 (ЩУ) - ещё дальше по маршруту на
-                                            ;; *LEP-End-MTP-Spacing2* м от опоры 2.
-                                            (setq Pt3
-                                                (list
-                                                    (+ (car Pt2) (* *LEP-End-MTP-Spacing2* (cos RouteDir)))
-                                                    (+ (cadr Pt2) (* *LEP-End-MTP-Spacing2* (sin RouteDir)))
-                                                )
+                                        ;; ✅ ДОБАВЛЕНО 2026-07-22: КТП - наземная подстанция,
+                                        ;; Ent1 сейчас - её блок-символ (не опора), см. ветку
+                                        ;; выше, где он вставлен через LEP:InsertKtpSymbol
+                                        ;; (LEP-KTPSYM.LSP).
+                                        ((= EndType "KTP")
+                                            (progn
+                                                (LEP:CreateKtpLabel Pt1 Status KtpNumber KtpPower VClass KtpMarka)
+                                                (LEP:AddKtpData Ent1 RouteID Status KtpNumber KtpPower KtpMarka)
+                                                (princ "\n[LEP-END] Установлена КТП.")
                                             )
-                                            (setq Ent3 (LEP:InsertPole Pt3 Rotation *LEP-End-PoleType* Status))
-                                            (LEP:CreatePoleLabel Pt3 *LEP-End-PoleType* Status *LEP-Label-SchU* *LEP-End-LabelAngle-SchU*)
-                                            (LEP:AddEquipData Ent3 RouteID *LEP-End-PoleType* "SCHU" Status)
+                                        )
 
-                                            (princ "\n[LEP-END] Установлен блок МТП (3 опоры: РЛК/МТП/ЩУ).")
+                                        (t
+                                            (progn
+                                                ;; Опора 1 (уже вставлена выше) - РЛК. Три
+                                                ;; подписи блока МТП разведены в РАЗНЫЕ
+                                                ;; стороны (веером) - опоры стоят близко
+                                                ;; друг к другу (шаг 3м/2м), при одинаковом
+                                                ;; направлении подписи накладывались друг на
+                                                ;; друга (замечено пользователем на тесте).
+                                                (LEP:CreatePoleLabel Pt1 *LEP-End-PoleType* Status *LEP-Label-RLK* *LEP-End-LabelAngle-RLK*)
+                                                (LEP:AddEquipData Ent1 RouteID *LEP-End-PoleType* "RLK" Status)
+
+                                                ;; Опора 2 (место подвеса МТП) - дальше ПО
+                                                ;; НАПРАВЛЕНИЮ МАРШРУТА (RouteDir, НЕ Rotation -
+                                                ;; см. фикс №1 в шапке файла) на
+                                                ;; *LEP-End-MTP-Spacing1* м. НЕ проекция на
+                                                ;; маршрут - это уже за пределами нарисованной
+                                                ;; полилинии.
+                                                (setq Pt2
+                                                    (list
+                                                        (+ (car Pt1) (* *LEP-End-MTP-Spacing1* (cos RouteDir)))
+                                                        (+ (cadr Pt1) (* *LEP-End-MTP-Spacing1* (sin RouteDir)))
+                                                    )
+                                                )
+                                                (setq Ent2 (LEP:InsertPole Pt2 Rotation *LEP-End-PoleType* Status VClass))
+
+                                                ;; Опора 3 (ЩУ) - ещё дальше по маршруту на
+                                                ;; *LEP-End-MTP-Spacing2* м от опоры 2. Считаем
+                                                ;; ДО подписи МТП (ниже) - нужна её точка для
+                                                ;; середины.
+                                                (setq Pt3
+                                                    (list
+                                                        (+ (car Pt2) (* *LEP-End-MTP-Spacing2* (cos RouteDir)))
+                                                        (+ (cadr Pt2) (* *LEP-End-MTP-Spacing2* (sin RouteDir)))
+                                                    )
+                                                )
+                                                (setq Ent3 (LEP:InsertPole Pt3 Rotation *LEP-End-PoleType* Status VClass))
+
+                                                ;; ✅ ФИКС 2026-07-22 (по просьбе пользователя):
+                                                ;; подпись МТП указывает на СЕРЕДИНУ между опорами
+                                                ;; 2 и 3 (физически трансформатор МТП подвешен
+                                                ;; МЕЖДУ ними), а не на саму опору 2 - опоры 2/3
+                                                ;; сами по себе НЕ переехали, Pt2/Pt3 те же точки,
+                                                ;; что и раньше, поменялась только точка, куда
+                                                ;; указывает ВЫНОСКА подписи.
+                                                (setq MtpMidPt
+                                                    (list
+                                                        (/ (+ (car Pt2) (car Pt3)) 2.0)
+                                                        (/ (+ (cadr Pt2) (cadr Pt3)) 2.0)
+                                                    )
+                                                )
+                                                ;; MtpLabel - выбранная мощность (2026-07-16), не
+                                                ;; общий фиксированный *LEP-Label-MTP* - записывается
+                                                ;; целиком как EQUIP, чтобы разные МТП по мощности не
+                                                ;; слились в одну строку в ведомости (см. LEP-CONFIG.LSP,
+                                                ;; *LEP-MTP-Types*, и LEP:GetEquipLabel в LEP-REPORT.LSP).
+                                                (LEP:CreatePoleLabel MtpMidPt *LEP-End-PoleType* Status MtpLabel *LEP-End-LabelAngle-MTP*)
+                                                (LEP:AddEquipData Ent2 RouteID *LEP-End-PoleType* MtpLabel Status)
+
+                                                (LEP:CreatePoleLabel Pt3 *LEP-End-PoleType* Status *LEP-Label-SchU* *LEP-End-LabelAngle-SchU*)
+                                                (LEP:AddEquipData Ent3 RouteID *LEP-End-PoleType* "SCHU" Status)
+
+                                                (princ "\n[LEP-END] Установлен блок МТП (3 опоры: РЛК/МТП/ЩУ, подпись МТП - между 2-й и 3-й опорой).")
+                                            )
                                         )
                                     )
                                 )
@@ -340,5 +486,5 @@
 )
 
 
-(princ "\nLEP-END v0.6 загружен (ПУ на существующую опору без новой геометрии).")
+(princ "\nLEP-END v1.0 загружен (КТП блоком-символом, СТП текстом, подпись МТП между 2-й и 3-й опорой).")
 (princ)
