@@ -490,15 +490,26 @@
 ; LEP:AddKtpData
 ;
 ; Данные наземной КТП (2026-07-22) - НЕ опора, свой набор ключей: TYPE
-; "KTP" (не "POLE" - LEP-REPORT.LSP сканирует её отдельным этапом, а
-; LEP:PickPole/LEP-SPAN не должны принимать её за опору пролёта -
-; фильтр TYPE="POLE" там уже есть, KTP под него не попадёт). Number/
-; Power/Marka - свободный ввод пользователя (нет фиксированного
+; "KTP" (не "POLE" - LEP-REPORT.LSP сканирует её отдельным этапом).
+; Number/Power/Marka - свободный ввод пользователя (нет фиксированного
 ; списка, в отличие от МТП/СТП - см. LEP-CONFIG.LSP).
+;
+; ⚠️ ИСПРАВЛЕНО В КОММЕНТАРИИ 2026-07-24: здесь раньше было написано,
+; что "LEP:PickPole/LEP-SPAN не должны принимать КТП за опору пролёта".
+; Это БОЛЬШЕ НЕ ВЕРНО - с 2026-07-24 кабельный пролёт может начинаться
+; и заканчиваться на КТП или кабельном киоске (реальный случай: КТП ->
+; два кабеля 0,4 кВ -> киоск с двумя ПУ, опор нет вообще).
+; LEP:PickPole теперь принимает TYPE = POLE/KTP/KK, см. LEP-SPAN.LSP.
+;
+; HighSide - класс ВЫСОКОЙ стороны КТП ("10"/"6", *LEP-KTP-HighSide*).
+; Хранится отдельным ключом, а НЕ берётся из класса маршрута: КТП -
+; граница двух классов (на входе 10/6 кВ, на выходе 0,4 кВ), и трасса
+; от неё к заявителю вполне может быть 0,4 кВ - тогда класс маршрута
+; про высокую сторону не говорит вообще ничего.
 ;
 ;=====================================================================
 
-(defun LEP:AddKtpData (Ent RouteID Status Number Power Marka)
+(defun LEP:AddKtpData (Ent RouteID Status Number Power Marka HighSide)
 
     (LEP:SetData
         Ent
@@ -509,6 +520,42 @@
             (cons "NUMBER" Number)
             (cons "POWER" Power)
             (cons "MARKA" Marka)
+            (cons "HIGHSIDE" HighSide)
+        )
+    )
+
+)
+
+
+;=====================================================================
+;
+; LEP:AddKkData
+;
+; Данные кабельного киоска (КК, 2026-07-24) - тоже НЕ опора, свой
+; TYPE = "KK". Устроен по образцу LEP:AddKtpData выше.
+;
+; Number  - номер киоска (свободный ввод, может быть пустой строкой -
+;           не у всех киосков вообще есть номер на плане).
+; PuCount - СКОЛЬКО приборов учёта стоит внутри киоска. Отдельными
+;           объектами ПУ не рисуются СОЗНАТЕЛЬНО: внутри киоска они
+;           ничем на плане не отличаются друг от друга, показывать там
+;           нечего - в ведомость они попадают просто числом штук (см.
+;           ЭТАП 2.6 в LEP-REPORT.LSP). Хранится СТРОКОЙ, как и все
+;           остальные значения XDATA в этом проекте (XDATA у нас
+;           везде текстовая, число разбирается через atoi при чтении).
+;
+;=====================================================================
+
+(defun LEP:AddKkData (Ent RouteID Status Number PuCount)
+
+    (LEP:SetData
+        Ent
+        (list
+            (cons "TYPE" "KK")
+            (cons "ROUTE" RouteID)
+            (cons "STATUS" Status)
+            (cons "NUMBER" Number)
+            (cons "PUCOUNT" PuCount)
         )
     )
 
@@ -574,13 +621,14 @@
 )
 
 
-(defun LEP:ReassignSpanRoute (Ent NewRouteID / Status Wire Section Length RawLength Pole1 Pole2 LabelHandle Method DataList)
+(defun LEP:ReassignSpanRoute (Ent NewRouteID / Status Wire Section Length RawLength Reserve Pole1 Pole2 LabelHandle Method DataList)
 
     (setq Status     (LEP:GetDataValue Ent "STATUS"))
     (setq Wire       (LEP:GetDataValue Ent "WIRE"))
     (setq Section    (LEP:GetDataValue Ent "SECTION"))
     (setq Length     (LEP:GetDataValue Ent "LENGTH"))
     (setq RawLength  (LEP:GetDataValue Ent "RAWLENGTH"))
+    (setq Reserve    (LEP:GetDataValue Ent "RESERVE"))
     (setq Pole1      (LEP:GetDataValue Ent "POLE1HANDLE"))
     (setq Pole2      (LEP:GetDataValue Ent "POLE2HANDLE"))
     (setq LabelHandle (LEP:GetDataValue Ent "LABELHANDLE"))
@@ -602,6 +650,7 @@
     ;; дописываем только если реально были, тем же приёмом, что уже
     ;; используется чуть выше для LABELHANDLE/EQUIP у опор.
     (if RawLength   (setq DataList (append DataList (list (cons "RAWLENGTH" RawLength)))))
+    (if Reserve     (setq DataList (append DataList (list (cons "RESERVE" Reserve)))))
     (if Pole1       (setq DataList (append DataList (list (cons "POLE1HANDLE" Pole1)))))
     (if Pole2       (setq DataList (append DataList (list (cons "POLE2HANDLE" Pole2)))))
     (if LabelHandle (setq DataList (append DataList (list (cons "LABELHANDLE" LabelHandle)))))
@@ -631,7 +680,7 @@
 ;
 ;=====================================================================
 
-(defun LEP:SetSpanLabelHandle (Ent NewLabelHandle / Status Wire Section Length RawLength Pole1 Pole2 Method RouteID)
+(defun LEP:SetSpanLabelHandle (Ent NewLabelHandle / Status Wire Section Length RawLength Reserve Pole1 Pole2 Method RouteID)
 
     (setq RouteID    (LEP:GetDataValue Ent "ROUTE"))
     (setq Status     (LEP:GetDataValue Ent "STATUS"))
@@ -639,6 +688,16 @@
     (setq Section    (LEP:GetDataValue Ent "SECTION"))
     (setq Length     (LEP:GetDataValue Ent "LENGTH"))
     (setq RawLength  (LEP:GetDataValue Ent "RAWLENGTH"))
+    ;; ⚠️ ДОБАВЛЕНО 2026-07-24 - и это НЕ мелочь: эта функция вызывается
+    ;; ПОСЛЕ КАЖДОГО объединения подписей, то есть практически у каждого
+    ;; пролёта сразу после создания. Забудь её здесь - и ключ RESERVE
+    ;; (метры концевых заделок, поконцовый расчёт) стирался бы через
+    ;; секунду после того, как его записали, а подпись группы молча
+    ;; откатывалась бы на запасное значение "две опоры" для всех
+    ;; пролётов подряд. Ровно та ловушка, ради которой в этом файле и
+    ;; заведён приём "прочитать всё - переписать всё же самое"
+    ;; (LEP:SetData перезаписывает XDATA ЦЕЛИКОМ).
+    (setq Reserve    (LEP:GetDataValue Ent "RESERVE"))
     (setq Pole1      (LEP:GetDataValue Ent "POLE1HANDLE"))
     (setq Pole2      (LEP:GetDataValue Ent "POLE2HANDLE"))
     (setq Method     (LEP:GetDataValue Ent "METHOD"))
@@ -657,6 +716,7 @@
                 (cons "POLE2HANDLE" Pole2)
                 (cons "LABELHANDLE" NewLabelHandle)
             )
+            (if Reserve (list (cons "RESERVE" Reserve)) nil)
             (if Method (list (cons "METHOD" Method)) nil)
         )
     )

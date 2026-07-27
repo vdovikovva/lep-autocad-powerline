@@ -317,7 +317,8 @@
 
 (defun C:LEP-REPORT ( / VL-SS PoleSS ExistPoleSS KtpSS GnbSS i Ent RouteID Status WireName WireLength
                         PoleName EquipCode EquipName EquipStatus KtpName MasterList MergedList CsvPath CsvFile FileCheck
-                        RouteItem BoreList BoreItem BoreKey BoreLen RawStr PipeCount)
+                        RouteItem BoreList BoreItem BoreKey BoreLen RawStr PipeCount
+                        TpType KkName PuStr PuCount)
 
     (LEP:PrintHeader "Выгрузка ведомости в CSV (только Проект.)")
 
@@ -581,6 +582,11 @@
     ; двух отдельных, различимых по номеру строк.
     ;=================================================================
 
+    ;; ✅ РАСШИРЕНО 2026-07-24: на ЭТОМ ЖЕ слое теперь живёт и КАБЕЛЬНЫЙ
+    ;; КИОСК (КК) - отдельный слой для него не заводили, потому что
+    ;; различаются они по ключу TYPE в XDATA, а не по слою (проверка
+    ;; TYPE тут была с самого начала - именно она и позволила добавить
+    ;; киоск на готовый слой без единой правки в LEP-SETUP).
     (setq KtpSS (ssget "_X" (list '(0 . "INSERT") (cons 8 *LEP-Layer-Proj-TP*))))
 
     (if KtpSS
@@ -588,14 +594,16 @@
             (setq i 0)
             (repeat (sslength KtpSS)
                 (setq Ent (ssname KtpSS i))
-                (if (= (LEP:GetDataValue Ent "TYPE") "KTP")
-                    (progn
-                        (setq Status (LEP:GetDataValue Ent "STATUS"))
-                        (if (= Status "PROJECT")
-                            (progn
-                                (setq RouteID (LEP:GetDataValue Ent "ROUTE"))
-                                (if (not RouteID) (setq RouteID "БЕЗ_ТРАССЫ"))
+                (setq TpType (LEP:GetDataValue Ent "TYPE"))
+                (setq Status (LEP:GetDataValue Ent "STATUS"))
 
+                (if (and (member TpType '("KTP" "KK")) (= Status "PROJECT"))
+                    (progn
+                        (setq RouteID (LEP:GetDataValue Ent "ROUTE"))
+                        (if (not RouteID) (setq RouteID "БЕЗ_ТРАССЫ"))
+
+                        (if (= TpType "KTP")
+                            (progn
                                 (setq KtpName
                                     (strcat
                                         "КТП-" (LEP:GetDataValue Ent "NUMBER")
@@ -603,6 +611,47 @@
                                     )
                                 )
                                 (setq MasterList (LEP:AddToMasterList MasterList RouteID KtpName 1 "шт."))
+                            )
+
+                            ;;-------------------------------------------------
+                            ;; КАБЕЛЬНЫЙ КИОСК (2026-07-24) - ДВЕ строки в
+                            ;; ведомости с одного объекта:
+                            ;;   1) сам киоск - 1 шт.;
+                            ;;   2) приборы учёта внутри него - N шт.
+                            ;; ПУ не рисуются отдельными объектами (внутри
+                            ;; киоска они на плане неразличимы), поэтому
+                            ;; единственное место, откуда ведомость может о них
+                            ;; узнать - ключ PUCOUNT в XDATA самого киоска.
+                            ;;
+                            ;; Название строки ПУ - тот же *LEP-Label-PU*, что и
+                            ;; у ПУ на опоре: это ОДИН И ТОТ ЖЕ прибор, и в
+                            ;; ведомости он должен складываться в одну строку
+                            ;; независимо от того, где стоит - на опоре или в
+                            ;; киоске (для закупки важно общее количество).
+                            ;;
+                            ;; Строка ПУ не добавляется вовсе, если счётчик 0
+                            ;; или ключа нет (киоск без приборов учёта - вполне
+                            ;; реальная вещь, например чисто распределительный):
+                            ;; строка "ПУ - 0 шт." в ведомости только мешает.
+                            ;;-------------------------------------------------
+                            (progn
+                                (setq KkName
+                                    (if (and (LEP:GetDataValue Ent "NUMBER")
+                                             (/= (LEP:GetDataValue Ent "NUMBER") "")
+                                        )
+                                        (strcat *LEP-Report-Label-KK* " " *LEP-Label-KK* "-" (LEP:GetDataValue Ent "NUMBER"))
+                                        *LEP-Report-Label-KK*
+                                    )
+                                )
+                                (setq MasterList (LEP:AddToMasterList MasterList RouteID KkName 1 "шт."))
+
+                                (setq PuStr (LEP:GetDataValue Ent "PUCOUNT"))
+                                (setq PuCount (if PuStr (atoi PuStr) 0))
+                                (if (> PuCount 0)
+                                    (setq MasterList
+                                        (LEP:AddToMasterList MasterList RouteID *LEP-Label-PU* PuCount "шт.")
+                                    )
+                                )
                             )
                         )
                     )

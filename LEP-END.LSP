@@ -195,7 +195,7 @@
 ; первая строка жёстко "оп. [тип]", здесь другой формат ("КТП-...").
 ;=====================================================================
 
-(defun LEP:CreateKtpLabel (Point Status Number Power VClass Marka / StatusText Line1 Line2 LabelText TextPoint LabelEnt)
+(defun LEP:CreateKtpLabel (Point Status Number Power HighSide Marka / StatusText Line1 Line2 LabelText TextPoint LabelEnt)
 
     (if (= Status "EXIST")
         (setq StatusText "Сущ.")
@@ -203,9 +203,68 @@
     )
 
     (setq Line1 (strcat StatusText " КТП-" Number))
-    (setq Line2 (strcat (rtos Power 2 0) "/" VClass "/0,4 кВ"))
+
+    ;; ⚠️ ФИКС 2026-07-24: раньше в середину строки подставлялся КЛАСС
+    ;; МАРШРУТА, на котором стоит КТП - и пока КТП ставили только на
+    ;; 10-кВ трассу, это случайно совпадало с высокой стороной. Но КТП -
+    ;; это ГРАНИЦА двух классов (вход 10/6 кВ, выход 0,4 кВ), и трасса
+    ;; от неё к заявителю вполне может быть 0,4 кВ (реальный случай
+    ;; пользователя: КТП -> два кабеля 0,4 кВ -> кабельный киоск). На
+    ;; такой трассе получался мусор "160/04/0,4 кВ": и сырой код класса
+    ;; вместо человекочитаемого "0,4", и логически неверно. Теперь
+    ;; высокая сторона - ОТДЕЛЬНЫЙ вопрос при постановке КТП
+    ;; (*LEP-KTP-HighSide*), к классу этой трассы отношения не имеет.
+    (setq Line2 (strcat (rtos Power 2 0) "/" HighSide "/0,4 кВ"))
 
     (setq LabelText (strcat Line1 "\\P" Line2 "\\P" Marka))
+
+    (setq TextPoint
+        (list
+            (+ (car Point) *LEP-LeaderOffset*)
+            (+ (cadr Point) *LEP-LeaderOffset*)
+        )
+    )
+
+    (command "_.MLEADER" Point TextPoint LabelText)
+    (setq LabelEnt (entlast))
+
+    (LEP:SetMLeaderBackgroundMask LabelEnt)
+    (LEP:BringToFront LabelEnt)
+
+    LabelEnt
+)
+
+
+;=====================================================================
+; LEP:CreateKkLabel
+;
+; Подпись-выноска кабельного киоска (КК, 2026-07-24) - ДВЕ строки:
+;   "[статус]. КК-[номер]"  (или просто "[статус]. КК", если номер не
+;                            указан - не у каждого киоска он есть)
+;   "ПУ - N шт."            (сколько приборов учёта внутри; строка
+;                            вообще не появляется, если N = 0)
+;
+; Отдельная функция, а не LEP:CreatePoleLabel/LEP:CreateKtpLabel - у
+; тех свой жёсткий формат первой строки ("оп. [тип]" / "КТП-[номер]").
+;=====================================================================
+
+(defun LEP:CreateKkLabel (Point Status Number PuCount / StatusText Line1 LabelText TextPoint LabelEnt)
+
+    (if (= Status "EXIST")
+        (setq StatusText "Сущ.")
+        (setq StatusText "Проект.")
+    )
+
+    ;; Номер может быть пустой строкой - тогда не лепим висящий дефис.
+    (if (and Number (/= Number ""))
+        (setq Line1 (strcat StatusText " " *LEP-Label-KK* "-" Number))
+        (setq Line1 (strcat StatusText " " *LEP-Label-KK*))
+    )
+
+    (if (> PuCount 0)
+        (setq LabelText (strcat Line1 "\\P" *LEP-Label-PU* " - " (itoa PuCount) " шт."))
+        (setq LabelText Line1)
+    )
 
     (setq TextPoint
         (list
@@ -236,7 +295,8 @@
 (defun C:LEP-END (/ Route RouteID VClass Choice EndType Status ClickPoint InsertResult
                     Pt1 Pt2 Pt3 MtpMidPt Rotation RouteDir RouteVerts Ent1 Ent2 Ent3 OldOs OldError
                     ExistPoleEnt LabelHandle LabelEnt MtpChoice MtpLabel StpChoice StpLabel
-                    KtpNumber KtpPower KtpMarka)
+                    KtpNumber KtpPower KtpMarka KtpHighChoice KtpHighSide
+                    KkNumber KkPuCount)
 
     (setq OldError *error*)
     (defun *error* (msg)
@@ -263,6 +323,7 @@
                 (cons "МТП (10/6 кВ - 3 опоры: РЛК/МТП/ЩУ)" "MTP")
                 (cons "СТП (трансформатор на ОДНОЙ опоре)" "STP")
                 (cons "КТП (наземная подстанция, без опоры)" "KTP")
+                (cons "КК (кабельный киоск с ПУ, без опоры)" "KK")
                 (cons "ПУ на СУЩЕСТВУЮЩУЮ опору (без новой опоры)" "PU_EXIST")
             )
             "Тип оконечного оборудования (Enter - отмена)"
@@ -379,7 +440,41 @@
                                     (setq KtpNumber (getstring T "\nНомер КТП (например 5766): "))
                                     (initget 6) ; запрет нуля и отрицательных
                                     (setq KtpPower (getreal "\nМощность КТП, кВА: "))
+
+                                    ;; ⚠️ ДОБАВЛЕНО 2026-07-24: высокая сторона -
+                                    ;; ОТДЕЛЬНЫЙ вопрос, а не класс маршрута (см.
+                                    ;; подробное обоснование в LEP:CreateKtpLabel
+                                    ;; выше). Enter - берём первый пункт списка
+                                    ;; (10 кВ, самый частый), а не обрываем всю
+                                    ;; постановку КТП из-за пропущенного уточнения -
+                                    ;; тот же принцип, что у мощности МТП.
+                                    (setq KtpHighChoice (LEP:ChooseFromList *LEP-KTP-HighSide* "Высокая сторона КТП"))
+                                    (setq KtpHighSide
+                                        (if KtpHighChoice
+                                            (cdr KtpHighChoice)
+                                            (cdr (car *LEP-KTP-HighSide*))
+                                        )
+                                    )
+
                                     (setq KtpMarka (getstring T "\nМарка трансформатора (например ТМГ-160): "))
+                                )
+                            )
+
+                            ;; ✅ ДОБАВЛЕНО 2026-07-24: данные кабельного киоска.
+                            ;; Номер - свободный ввод и может быть ПУСТЫМ (не у
+                            ;; каждого киоска он есть на плане), поэтому здесь нет
+                            ;; никакой проверки на пустоту - LEP:CreateKkLabel сама
+                            ;; умеет собрать подпись без номера.
+                            ;; Количество ПУ - initget 4 запрещает отрицательные, но
+                            ;; РАЗРЕШАЕТ ноль: киоск без приборов учёта (например
+                            ;; только распределительный) - вполне реальная вещь.
+                            ;; Enter (nil) трактуем как 0, чтобы не уронить itoa ниже.
+                            (if (= EndType "KK")
+                                (progn
+                                    (setq KkNumber (getstring T "\nНомер киоска (Enter - без номера): "))
+                                    (initget 4) ; запрет отрицательных, ноль разрешён
+                                    (setq KkPuCount (getint "\nСколько приборов учёта (ПУ) в киоске: "))
+                                    (if (not KkPuCount) (setq KkPuCount 0))
                                 )
                             )
 
@@ -419,9 +514,21 @@
                                     ;; объектом, см. LEP-KTPSYM.LSP) вместо трапеции.
                                     ;; Rotation для неё не используется (символ КТП
                                     ;; не разворачивается по направлению маршрута).
-                                    (if (= EndType "KTP")
-                                        (setq Ent1 (LEP:InsertKtpSymbol Pt1 Status))
-                                        (setq Ent1 (LEP:InsertPole Pt1 Rotation *LEP-End-PoleType* Status VClass))
+                                    ;; ✅ 2026-07-24: киоск (КК) вставляется тем же
+                                    ;; способом, что и КТП - свой блок-символ вместо
+                                    ;; трапеции опоры, Rotation не используется
+                                    ;; (наземные объекты не разворачиваются по
+                                    ;; направлению маршрута).
+                                    (cond
+                                        ((= EndType "KTP")
+                                            (setq Ent1 (LEP:InsertKtpSymbol Pt1 Status))
+                                        )
+                                        ((= EndType "KK")
+                                            (setq Ent1 (LEP:InsertKkSymbol Pt1 Status))
+                                        )
+                                        (t
+                                            (setq Ent1 (LEP:InsertPole Pt1 Rotation *LEP-End-PoleType* Status VClass))
+                                        )
                                     )
                                     (command "_.GEOMCONSTRAINT" "_COincident" Ent1 Pt1 Route Pt1 "")
 
@@ -465,9 +572,28 @@
                                         ;; (LEP-KTPSYM.LSP).
                                         ((= EndType "KTP")
                                             (progn
-                                                (LEP:CreateKtpLabel Pt1 Status KtpNumber KtpPower VClass KtpMarka)
-                                                (LEP:AddKtpData Ent1 RouteID Status KtpNumber KtpPower KtpMarka)
+                                                (LEP:CreateKtpLabel Pt1 Status KtpNumber KtpPower KtpHighSide KtpMarka)
+                                                (LEP:AddKtpData Ent1 RouteID Status KtpNumber KtpPower KtpMarka KtpHighSide)
                                                 (princ "\n[LEP-END] Установлена КТП.")
+                                            )
+                                        )
+
+                                        ;; ✅ ДОБАВЛЕНО 2026-07-24: кабельный киоск.
+                                        ;; Ent1 сейчас - его блок-символ (простой
+                                        ;; прямоугольник, LEP-KKSYM.LSP), см. cond
+                                        ;; выше. Приборы учёта внутри киоска
+                                        ;; отдельными объектами НЕ рисуются - только
+                                        ;; число (см. LEP:AddKkData, LEP-DATA.LSP).
+                                        ((= EndType "KK")
+                                            (progn
+                                                (LEP:CreateKkLabel Pt1 Status KkNumber KkPuCount)
+                                                (LEP:AddKkData Ent1 RouteID Status KkNumber (itoa KkPuCount))
+                                                (princ
+                                                    (strcat
+                                                        "\n[LEP-END] Установлен кабельный киоск (ПУ внутри: "
+                                                        (itoa KkPuCount) " шт.)."
+                                                    )
+                                                )
                                             )
                                         )
 

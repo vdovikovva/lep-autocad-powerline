@@ -146,6 +146,8 @@
 ; 14. KTPSYM     символ КТП (прямоугольник+треугольник) -- ДОБАВЛЕНО
 ;                2026-07-22 (грузится ПЕРЕД END - использует его
 ;                функции)
+; 15. KKSYM      символ кабельного киоска (прямоугольник) -- ДОБАВЛЕНО
+;                2026-07-24 (тоже ПЕРЕД END, по той же причине)
 ;
 ;=====================================================================
 
@@ -162,6 +164,7 @@
 (LEP:LoadFile "LEP-POLYLINE.LSP")
 (LEP:LoadFile "LEP-POLESYM.LSP")
 (LEP:LoadFile "LEP-KTPSYM.LSP")
+(LEP:LoadFile "LEP-KKSYM.LSP")
 (LEP:LoadFile "LEP-ROUTE.LSP")
 (LEP:LoadFile "LEP-POLE.LSP")
 (LEP:LoadFile "LEP-SPAN.LSP")
@@ -210,6 +213,11 @@
 ;; LEP-KTPSYM.LSP, *LEP-Block-Ktp* в CONFIG) нужен ВСЕГДА, создаётся
 ;; автоматически, сама ничего не делает повторно, если блок уже есть.
 (LEP:CreateKtpSymbolBlock)
+
+;; То же самое для блока-символа кабельного киоска (простой
+;; прямоугольник, LEP-KKSYM.LSP, *LEP-Block-Kk* в CONFIG) - добавлен
+;; 2026-07-24 вместе с самим киоском.
+(LEP:CreateKkSymbolBlock)
 
 (princ "\n")
 (princ "======================================")
