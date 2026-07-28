@@ -148,6 +148,8 @@
 ;                функции)
 ; 15. KKSYM      символ кабельного киоска (прямоугольник) -- ДОБАВЛЕНО
 ;                2026-07-24 (тоже ПЕРЕД END, по той же причине)
+; 16. TRANSSYM   символ точки смены способа прокладки (непечатаемый
+;                кружок) -- ДОБАВЛЕНО 2026-07-24 (тоже ПЕРЕД END)
 ;
 ;=====================================================================
 
@@ -165,6 +167,7 @@
 (LEP:LoadFile "LEP-POLESYM.LSP")
 (LEP:LoadFile "LEP-KTPSYM.LSP")
 (LEP:LoadFile "LEP-KKSYM.LSP")
+(LEP:LoadFile "LEP-TRANSSYM.LSP")
 (LEP:LoadFile "LEP-ROUTE.LSP")
 (LEP:LoadFile "LEP-POLE.LSP")
 (LEP:LoadFile "LEP-SPAN.LSP")
@@ -218,6 +221,10 @@
 ;; прямоугольник, LEP-KKSYM.LSP, *LEP-Block-Kk* в CONFIG) - добавлен
 ;; 2026-07-24 вместе с самим киоском.
 (LEP:CreateKkSymbolBlock)
+
+;; И для маркера смены способа прокладки (непечатаемый кружок,
+;; LEP-TRANSSYM.LSP, *LEP-Block-Trans* в CONFIG) - добавлен 2026-07-24.
+(LEP:CreateTransSymbolBlock)
 
 (princ "\n")
 (princ "======================================")
