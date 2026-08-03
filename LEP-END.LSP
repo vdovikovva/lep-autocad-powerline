@@ -2,7 +2,28 @@
 ;
 ;   ПРОЕКТ:      LEP
 ;   ФАЙЛ:        LEP-END.LSP
-;   ВЕРСИЯ:      1.1  (2026-07-24: МТП на 6 кВ - две новые строки в
+;   ВЕРСИЯ:      1.4  (2026-08-03: у окончания "ПУ" СВОЙ тип опоры -
+;                *LEP-End-PoleType-PU* ("П23"), у СТП и трёх опор МТП
+;                прежний *LEP-End-PoleType* ("П20-3Н"). Тип считается
+;                один раз в переменную PoleType и используется везде -
+;                блок, подпись, XDATA. В ведомость попадает сам собой:
+;                ЭТАП 2 считает опоры по ключу MODEL, а "П23" уже есть
+;                в *LEP-PoleTypes* (префикс "Опора ") и в
+;                *LEP-PoleColumns* (1 трапеция) - Claude)
+;   1.3  (2026-08-03: пункт "Точка смены способа прокладки
+;                КЛ" переименован в "Точка разрыва участка КЛ (смена
+;                способа ИЛИ новый прокол)" - маркер ставится и там, где
+;                способ НЕ меняется: два прокола ГНБ подряд под разными
+;                углами это ДВА прокола. Сама логика маркера не
+;                тронута, изменилось поведение объединения подписей -
+;                см. LEP-SPAN.LSP 2.1 - Claude)
+;   1.2  (2026-07-28: все ветки команды запоминают ename
+;                созданной подписи и передают его в LEP:AddEquipData -
+;                без этого опоры ПУ/СТП/РЛК/МТП/ЩУ оставались без
+;                LABELHANDLE: к опоре с ПУ не дописывалось "+ подъём
+;                кабеля по опоре" (LEP:AddKLPoleNote), а LEP-POLE-DELETE
+;                не убирал их подпись - Claude)
+;   1.1  (2026-07-24: МТП на 6 кВ - две новые строки в
 ;                *LEP-MTP-Types* ("МТП-160/6/0,4"/"МТП-250/6/0,4"),
 ;                всё остальное общее с 10 кВ (геометрия, подписи РЛК/ЩУ,
 ;                слой, статус). Новая LEP:GetDefaultMtpLabel - фолбэк
@@ -63,7 +84,11 @@
 ;   ЛЭП у заявителя (см. присланные пользователем скриншоты реальных
 ;   чертежей, 2026-07-10):
 ;
-;     ПУ  (0,4 кВ, мелкий заявитель)  - 1 опора *LEP-End-PoleType*
+;     ПУ  (0,4 кВ, мелкий заявитель)  - 1 опора *LEP-End-PoleType-PU*
+;                                        (⚠️ 2026-08-03 - СВОЙ тип,
+;                                        "П23"; у остальных окончаний
+;                                        по-прежнему общий
+;                                        *LEP-End-PoleType*)
 ;                                        с подписью "ПУ".
 ;     МТП (10 или 6 кВ,               - 3 опоры *LEP-End-PoleType*
 ;          крупный заявитель)            подряд (шаг *LEP-End-MTP-
@@ -92,7 +117,13 @@
 ;   трассы (за пределами нарисованной полилинии).
 ;
 ;   Тип опоры для МТП/ПУ ЗАФИКСИРОВАН (не спрашивается) - по прямому
-;   указанию пользователя: всегда *LEP-End-PoleType* ("П20-3Н").
+;   указанию пользователя. ⚠️ 2026-08-03: тип больше НЕ один на всех -
+;   у ПУ свой, *LEP-End-PoleType-PU* ("П23"), у СТП и у всех трёх опор
+;   МТП прежний *LEP-End-PoleType* ("П20-3Н"). Выбирается один раз в
+;   переменную PoleType сразу после выбора вида окончания, дальше по
+;   всей команде используется только она - и при вставке блока, и в
+;   подписи, и в XDATA (иначе они могли бы разойтись, а на чертеже это
+;   не видно).
 ;
 ;   ⚠️ ФИКС 2026-07-15: статус (Проект./Сущ.) раньше был зашит намертво
 ;   ("существующего МТП/ПУ не бывает") - оказалось, бывает: иногда
@@ -320,7 +351,7 @@
                     Pt1 Pt2 Pt3 MtpMidPt Rotation RouteDir RouteVerts Ent1 Ent2 Ent3 OldOs OldError
                     ExistPoleEnt LabelHandle LabelEnt MtpChoice MtpLabel StpChoice StpLabel
                     KtpNumber KtpPower KtpMarka KtpHighChoice KtpHighSide
-                    KkNumber KkPuCount)
+                    KkNumber KkPuCount PoleType)
 
     (setq OldError *error*)
     (defun *error* (msg)
@@ -348,7 +379,17 @@
                 (cons "СТП (трансформатор на ОДНОЙ опоре)" "STP")
                 (cons "КТП (наземная подстанция, без опоры)" "KTP")
                 (cons "КК (кабельный киоск с ПУ, без опоры)" "KK")
-                (cons "Точка смены способа прокладки КЛ (ГНБ <-> траншея)" "TRANS")
+                ;; ⚠️ ПЕРЕИМЕНОВАНО 2026-08-03. Было "Точка смены
+                ;; способа прокладки КЛ (ГНБ <-> траншея)" - название
+                ;; описывало ЕДИНСТВЕННЫЙ случай, ради которого маркер
+                ;; заводили, и прямо отговаривало ставить его там, где
+                ;; способ НЕ меняется. А ставить надо: два прокола ГНБ
+                ;; подряд под разными углами - это ДВА разных прокола
+                ;; (бур вышел из земли и зашёл заново), им нужны свои
+                ;; подписи и свой счёт труб, и разделяет их именно этот
+                ;; маркер. Теперь название говорит про общий смысл -
+                ;; "здесь один участок работ кончился, начался другой".
+                (cons "Точка разрыва участка КЛ (смена способа ИЛИ новый прокол)" "TRANS")
                 (cons "ПУ на СУЩЕСТВУЮЩУЮ опору (без новой опоры)" "PU_EXIST")
             )
             ;; ⚠️ Формулировка запроса поменялась 2026-07-24 с "Тип
@@ -366,6 +407,27 @@
         (progn
 
             (setq EndType (cdr Choice))
+
+            ;; ⚠️ ДОБАВЛЕНО 2026-08-03: ТИП ОПОРЫ ЗАВИСИТ ОТ ВИДА
+            ;; ОКОНЧАНИЯ. У "ПУ" он свой - *LEP-End-PoleType-PU* ("П23",
+            ;; прямое указание пользователя), у всего остального
+            ;; (СТП, три опоры МТП) - прежний общий *LEP-End-PoleType*.
+            ;;
+            ;; Вычисляем ОДИН РАЗ в переменную и дальше по всей команде
+            ;; пользуемся только ею - и при вставке блока, и в подписи, и
+            ;; в XDATA. Иначе тип пришлось бы подставлять в трёх местах
+            ;; отдельно, и достаточно забыть одно, чтобы блок на чертеже
+            ;; и запись в ведомости разошлись: символ стоял бы один, в
+            ;; подписи было бы написано другое, а в CSV попало бы третье.
+            ;; Такое расхождение на чертеже никак не видно - ровно тот
+            ;; класс ошибок, на котором этот проект уже обжигался
+            ;; (см. историю с XDATA у КТП).
+            (setq PoleType
+                (if (= EndType "PU")
+                    *LEP-End-PoleType-PU*
+                    *LEP-End-PoleType*
+                )
+            )
 
             (if (= EndType "PU_EXIST")
 
@@ -573,7 +635,7 @@
                                             (setq Ent1 (LEP:InsertTransSymbol Pt1))
                                         )
                                         (t
-                                            (setq Ent1 (LEP:InsertPole Pt1 Rotation *LEP-End-PoleType* Status VClass))
+                                            (setq Ent1 (LEP:InsertPole Pt1 Rotation PoleType Status VClass))
                                         )
                                     )
                                     (command "_.GEOMCONSTRAINT" "_COincident" Ent1 Pt1 Route Pt1 "")
@@ -588,8 +650,18 @@
 
                                         ((= EndType "PU")
                                             (progn
-                                                (LEP:CreatePoleLabel Pt1 *LEP-End-PoleType* Status *LEP-Label-PU* *LEP-Label-Angle-Default*)
-                                                (LEP:AddEquipData Ent1 RouteID *LEP-End-PoleType* "PU" Status)
+                                                ;; ⚠️ ФИКС 2026-07-28: результат LEP:CreatePoleLabel
+                                                ;; (ename созданной выноски) теперь ЗАПОМИНАЕТСЯ и
+                                                ;; передаётся в LEP:AddEquipData - раньше он просто
+                                                ;; выбрасывался, опора оставалась без LABELHANDLE, и
+                                                ;; LEP:AddKLPoleNote (LEP-SPAN.LSP) не могла дописать
+                                                ;; "+ подъём кабеля по опоре" к подписи опоры с ПУ.
+                                                ;; Подробный разбор - в шапке LEP:AddEquipData
+                                                ;; (LEP-DATA.LSP). То же самое сделано ниже во ВСЕХ
+                                                ;; остальных ветках (СТП/РЛК/МТП/ЩУ) - дырка была
+                                                ;; общая для всех опор этой команды.
+                                                (setq LabelEnt (LEP:CreatePoleLabel Pt1 PoleType Status *LEP-Label-PU* *LEP-Label-Angle-Default*))
+                                                (LEP:AddEquipData Ent1 RouteID PoleType "PU" Status LabelEnt)
                                                 (princ "\n[LEP-END] Установлена опора с ПУ.")
                                             )
                                         )
@@ -606,8 +678,8 @@
                                         ;; разные строки в ведомости).
                                         ((= EndType "STP")
                                             (progn
-                                                (LEP:CreatePoleLabel Pt1 *LEP-End-PoleType* Status (strcat "+ " StpLabel) *LEP-Label-Angle-Default*)
-                                                (LEP:AddEquipData Ent1 RouteID *LEP-End-PoleType* StpLabel Status)
+                                                (setq LabelEnt (LEP:CreatePoleLabel Pt1 PoleType Status (strcat "+ " StpLabel) *LEP-Label-Angle-Default*))
+                                                (LEP:AddEquipData Ent1 RouteID PoleType StpLabel Status LabelEnt)
                                                 (princ "\n[LEP-END] Установлена опора со СТП.")
                                             )
                                         )
@@ -642,7 +714,7 @@
                                         ((= EndType "TRANS")
                                             (progn
                                                 (LEP:AddTransData Ent1 RouteID)
-                                                (princ "\n[LEP-END] Поставлена точка смены способа прокладки. Теперь начертите ДВА пролёта: до неё и от неё.")
+                                                (princ "\n[LEP-END] Поставлена точка разрыва участка КЛ. Теперь начертите ДВА пролёта: до неё и от неё - они получат РАЗНЫЕ подписи и посчитаются как два отдельных участка.")
                                             )
                                         )
 
@@ -667,8 +739,8 @@
                                                 ;; друг к другу (шаг 3м/2м), при одинаковом
                                                 ;; направлении подписи накладывались друг на
                                                 ;; друга (замечено пользователем на тесте).
-                                                (LEP:CreatePoleLabel Pt1 *LEP-End-PoleType* Status *LEP-Label-RLK* *LEP-End-LabelAngle-RLK*)
-                                                (LEP:AddEquipData Ent1 RouteID *LEP-End-PoleType* "RLK" Status)
+                                                (setq LabelEnt (LEP:CreatePoleLabel Pt1 PoleType Status *LEP-Label-RLK* *LEP-End-LabelAngle-RLK*))
+                                                (LEP:AddEquipData Ent1 RouteID PoleType "RLK" Status LabelEnt)
 
                                                 ;; Опора 2 (место подвеса МТП) - дальше ПО
                                                 ;; НАПРАВЛЕНИЮ МАРШРУТА (RouteDir, НЕ Rotation -
@@ -682,7 +754,7 @@
                                                         (+ (cadr Pt1) (* *LEP-End-MTP-Spacing1* (sin RouteDir)))
                                                     )
                                                 )
-                                                (setq Ent2 (LEP:InsertPole Pt2 Rotation *LEP-End-PoleType* Status VClass))
+                                                (setq Ent2 (LEP:InsertPole Pt2 Rotation PoleType Status VClass))
 
                                                 ;; Опора 3 (ЩУ) - ещё дальше по маршруту на
                                                 ;; *LEP-End-MTP-Spacing2* м от опоры 2. Считаем
@@ -694,7 +766,7 @@
                                                         (+ (cadr Pt2) (* *LEP-End-MTP-Spacing2* (sin RouteDir)))
                                                     )
                                                 )
-                                                (setq Ent3 (LEP:InsertPole Pt3 Rotation *LEP-End-PoleType* Status VClass))
+                                                (setq Ent3 (LEP:InsertPole Pt3 Rotation PoleType Status VClass))
 
                                                 ;; ✅ ФИКС 2026-07-22 (по просьбе пользователя):
                                                 ;; подпись МТП указывает на СЕРЕДИНУ между опорами
@@ -714,11 +786,16 @@
                                                 ;; целиком как EQUIP, чтобы разные МТП по мощности не
                                                 ;; слились в одну строку в ведомости (см. LEP-CONFIG.LSP,
                                                 ;; *LEP-MTP-Types*, и LEP:GetEquipLabel в LEP-REPORT.LSP).
-                                                (LEP:CreatePoleLabel MtpMidPt *LEP-End-PoleType* Status MtpLabel *LEP-End-LabelAngle-MTP*)
-                                                (LEP:AddEquipData Ent2 RouteID *LEP-End-PoleType* MtpLabel Status)
+                                                ;; ⚠️ Подпись МТП висит на СЕРЕДИНЕ между опорами 2 и
+                                                ;; 3, но LABELHANDLE пишем опоре 2 - той, к которой
+                                                ;; она относится по смыслу (и на которую в ведомости
+                                                ;; записан сам МТП). Значит удаление опоры 2 уберёт и
+                                                ;; эту подпись - так и надо.
+                                                (setq LabelEnt (LEP:CreatePoleLabel MtpMidPt PoleType Status MtpLabel *LEP-End-LabelAngle-MTP*))
+                                                (LEP:AddEquipData Ent2 RouteID PoleType MtpLabel Status LabelEnt)
 
-                                                (LEP:CreatePoleLabel Pt3 *LEP-End-PoleType* Status *LEP-Label-SchU* *LEP-End-LabelAngle-SchU*)
-                                                (LEP:AddEquipData Ent3 RouteID *LEP-End-PoleType* "SCHU" Status)
+                                                (setq LabelEnt (LEP:CreatePoleLabel Pt3 PoleType Status *LEP-Label-SchU* *LEP-End-LabelAngle-SchU*))
+                                                (LEP:AddEquipData Ent3 RouteID PoleType "SCHU" Status LabelEnt)
 
                                                 (princ "\n[LEP-END] Установлен блок МТП (3 опоры: РЛК/МТП/ЩУ, подпись МТП - между 2-й и 3-й опорой).")
                                             )

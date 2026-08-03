@@ -2,7 +2,12 @@
 ;
 ;   ПРОЕКТ:      LEP
 ;   ФАЙЛ:        LEP-POLE.LSP
-;   ВЕРСИЯ:      1.7  (LEP:InsertPole/PlacePoleOnRoute получили параметр
+;   ВЕРСИЯ:      1.8  (C:LEP-POLE-MOVE переносит опору ЦЕЛИКОМ: старый
+;                текст подписи и данные об оборудовании (EQUIP/
+;                EQUIPSTATUS) больше не теряются - раньше опора с ПУ
+;                после переноса становилась обычной и пропадала из
+;                ведомости - Claude, 2026-07-28)
+;   1.7  (LEP:InsertPole/PlacePoleOnRoute получили параметр
 ;                VClass - слой опоры теперь зависит от класса
 ;                напряжения маршрута, не только от статуса (4 granular
 ;                слоя вместо 2, см. LEP-CONFIG.LSP) - Claude, 2026-07-22)
@@ -975,9 +980,46 @@
 ; ⚠️ Если вставка на новом месте всё же не удастся (редкий случай) -
 ; старая опора к этому моменту уже удалена, отдельное предупреждение
 ; в консоль - ставьте новую вручную командой LEP-POLE.
+;
+; ✅ ФИКС 2026-07-28: ПЕРЕНОС ОПОРЫ БОЛЬШЕ НЕ ОБЕДНЯЕТ ЕЁ.
+;
+; Раньше переносились только ТИП и СТАТУС - всё остальное молча
+; терялось, потому что новая опора создаётся с нуля обычной
+; LEP:PlacePoleOnRoute, а та знает лишь про обычную опору на трассе:
+;
+;   - ключ EQUIP (ПУ/СТП/РЛК/МТП/ЩУ) - опора переставала быть опорой с
+;     оборудованием, и это оборудование ПРОПАДАЛО ИЗ ВЕДОМОСТИ
+;     (LEP-REPORT считает его именно по EQUIP). Молча, без ошибки;
+;   - текст подписи - новая собиралась стандартная, "[статус] оп.
+;     [тип]" + класс напряжения. Всё, что было дописано в подпись
+;     сверх этого, исчезало: "ПУ", "+ проект. ПУ" (оборудование на
+;     существующей опоре), "+ подъём кабеля по опоре" (конец
+;     кабельного пролёта), "+ СТП-XX кВА".
+;
+; Теперь ДО удаления запоминаются EQUIP/EQUIPSTATUS и ПОЛНЫЙ текст
+; старой подписи, а после вставки новой опоры возвращаются на место:
+;
+;   - текст подписи ставится старый ЦЕЛИКОМ (LEP:SetMLeaderText,
+;     LEP-UTILS.LSP), а не собирается заново. Так надёжнее: перенос НЕ
+;     меняет ни тип, ни статус, ни класс линии - значит старый текст
+;     остаётся верным ДО ПОСЛЕДНЕЙ БУКВЫ, и его не нужно пытаться
+;     воспроизвести по кускам (а воспроизвести полностью и нельзя -
+;     дописанные строки в XDATA не хранятся нигде, они существуют
+;     только в самом тексте подписи);
+;   - EQUIP/EQUIPSTATUS дописываются в XDATA новой опоры через
+;     LEP:AddEquipToExistingPole (LEP-DATA.LSP) - ту самую функцию,
+;     которая умеет добавить оборудование, НЕ затирая остальные поля
+;     (TYPE/ROUTE/MODEL/STATUS/LABELHANDLE новой опоры).
+;
+; ⚠️ Если у старой опоры не было LABELHANDLE (опоры, поставленные ДО
+; фикса 2026-07-28, см. LEP:AddEquipData) - переносить текст неоткуда,
+; подпись останется стандартной, новой. Это не ошибка, а честный предел
+; возможного: старый текст в этом случае в чертеже уже не найти.
 ;=====================================================================
 
-(defun C:LEP-POLE-MOVE (/ Route Ent RouteID PoleType Status ClassLabel VClass NewPoint NewPoleEnt OldError)
+(defun C:LEP-POLE-MOVE (/ Route Ent RouteID PoleType Status ClassLabel VClass NewPoint NewPoleEnt
+                          Equip EquipStatus OldLabelHandle OldLabelEnt OldLabelText
+                          NewLabelHandle NewLabelEnt OldError)
 
     (setq OldError *error*)
     (defun *error* (msg)
@@ -1005,6 +1047,25 @@
                     (setq PoleType (LEP:GetDataValue Ent "MODEL"))
                     (setq Status (LEP:GetDataValue Ent "STATUS"))
 
+                    ;; ✅ 2026-07-28 (см. шапку команды): оборудование и
+                    ;; текст подписи - тоже ДО удаления. EQUIP есть не у
+                    ;; каждой опоры (у обычной его нет вовсе) - тогда
+                    ;; здесь просто nil, и ниже ничего не восстановится.
+                    (setq Equip (LEP:GetDataValue Ent "EQUIP"))
+                    (setq EquipStatus (LEP:GetDataValue Ent "EQUIPSTATUS"))
+
+                    ;; Текст подписи читаем СЕЙЧАС, пока подпись ещё
+                    ;; существует: LEP:DeletePoleGroup ниже сотрёт её
+                    ;; вместе с опорой, и после этого взять текст будет
+                    ;; неоткуда.
+                    (setq OldLabelHandle (LEP:GetDataValue Ent "LABELHANDLE"))
+                    (if OldLabelHandle
+                        (setq OldLabelEnt (handent OldLabelHandle))
+                    )
+                    (if OldLabelEnt
+                        (setq OldLabelText (LEP:GetMLeaderText OldLabelEnt))
+                    )
+
                     (setq VClass (LEP:GetDataValue Route "VCLASS"))
                     (setq ClassLabel (cdr (assoc VClass *LEP-VoltageClassLabel*)))
 
@@ -1014,6 +1075,46 @@
                         (progn
                             (LEP:DeletePoleGroup Ent)
                             (setq NewPoleEnt (LEP:PlacePoleOnRoute Route RouteID ClassLabel NewPoint PoleType Status VClass))
+
+                            ;; ✅ 2026-07-28 (см. шапку команды): возвращаем
+                            ;; новой опоре то, чего LEP:PlacePoleOnRoute про
+                            ;; неё не знает - старый текст подписи и данные
+                            ;; об оборудовании.
+                            (if NewPoleEnt
+                                (progn
+
+                                    ;; Текст подписи - старый ЦЕЛИКОМ. Хендл
+                                    ;; НОВОЙ подписи берём из XDATA новой
+                                    ;; опоры (LEP:AddPoleData его туда уже
+                                    ;; записала внутри LEP:PlacePoleOnRoute).
+                                    (if OldLabelText
+                                        (progn
+                                            (setq NewLabelHandle (LEP:GetDataValue NewPoleEnt "LABELHANDLE"))
+                                            (if NewLabelHandle
+                                                (setq NewLabelEnt (handent NewLabelHandle))
+                                            )
+                                            (if NewLabelEnt
+                                                (LEP:SetMLeaderText NewLabelEnt OldLabelText)
+                                            )
+                                        )
+                                    )
+
+                                    ;; Оборудование - через "дописать, не
+                                    ;; затирая остальное" (см. шапку
+                                    ;; LEP:AddEquipToExistingPole): обычная
+                                    ;; LEP:AddEquipData снесла бы LABELHANDLE
+                                    ;; новой опоры, только что записанный.
+                                    ;; EquipStatus может быть nil (у опор из
+                                    ;; LEP-END его нет) - LEP:SetData тогда
+                                    ;; просто не пишет этот ключ, то есть
+                                    ;; новая опора получается точь-в-точь
+                                    ;; такой же, какой была старая.
+                                    (if Equip
+                                        (LEP:AddEquipToExistingPole NewPoleEnt Equip EquipStatus)
+                                    )
+                                )
+                            )
+
                             (if NewPoleEnt
                                 (princ "\n[LEP-POLE-MOVE] Опора перенесена.")
                                 (princ "\n[LEP-POLE-MOVE] Не удалось вставить опору на новом месте - старая уже удалена, поставьте новую вручную командой LEP-POLE.")

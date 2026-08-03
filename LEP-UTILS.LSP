@@ -4,7 +4,11 @@
 ;
 ;   ФАЙЛ:        LEP-UTILS.LSP
 ;
-;   ВЕРСИЯ:      0.4  (LEP:AppendMLeaderText - дописать строку в готовую
+;   ВЕРСИЯ:      0.5  (LEP:GetMLeaderText/LEP:SetMLeaderText - чтение и
+;                замена текста готовой выноски целиком, вынесены из
+;                LEP:AppendMLeaderText для переноса подписи в
+;                C:LEP-POLE-MOVE, Claude, 2026-07-28)
+;   0.4  (LEP:AppendMLeaderText - дописать строку в готовую
 ;                выноску, для ПУ на сущ. опоре, Claude, 2026-07-15)
 ;   0.3  (LEP:BringToFront - DRAWORDER Front для подписей/
 ;                размеров, Claude, 2026-07-15)
@@ -348,11 +352,42 @@
 ; подтверждено дампом entget на реальном объекте.
 ;=====================================================================
 
-(defun LEP:AppendMLeaderText (LabelEnt ExtraText / D OldText NewText)
+(defun LEP:AppendMLeaderText (LabelEnt ExtraText)
+
+    (LEP:SetMLeaderText
+        LabelEnt
+        (strcat (LEP:GetMLeaderText LabelEnt) "\\P" ExtraText)
+    )
+
+)
+
+
+;=====================================================================
+; LEP:GetMLeaderText / LEP:SetMLeaderText
+;
+; Прочитать / заменить ЦЕЛИКОМ текст готовой выноски MLEADER. Вынесено
+; из LEP:AppendMLeaderText (2026-07-28), когда понадобилось не
+; дописать строку, а перенести текст подписи со старой опоры на новую
+; (C:LEP-POLE-MOVE, LEP-POLE.LSP) - чтобы работа с группой 304 (со
+; всеми её ловушками, описанными выше) осталась в ОДНОМ месте проекта,
+; а не расползлась по модулям двумя почти одинаковыми кусками.
+;
+; Про (assoc 304 ...) и второе, служебное вхождение той же группы
+; глубже в записи MULTILEADER - см. подробный разбор в шапке
+; LEP:AppendMLeaderText: берётся ПЕРВОЕ вхождение, а это и есть
+; настоящий текст (подтверждено живым тестом 2026-07-15).
+;=====================================================================
+
+(defun LEP:GetMLeaderText (LabelEnt)
+
+    (cdr (assoc 304 (entget LabelEnt)))
+
+)
+
+
+(defun LEP:SetMLeaderText (LabelEnt NewText / D)
 
     (setq D (entget LabelEnt))
-    (setq OldText (cdr (assoc 304 D)))
-    (setq NewText (strcat OldText "\\P" ExtraText))
     (setq D (subst (cons 304 NewText) (assoc 304 D) D))
     (entmod D)
     (command "_.REGEN")
