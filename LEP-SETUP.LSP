@@ -7,6 +7,10 @@
 ;   LEP-SETUP.LSP
 ;
 ;   ВЕРСИЯ:
+;   1.1  (2026-08-04: DIMTFILL - фон под текстом размерной линии.
+;        Найдено аудитом "у всех подписей должен быть background mask
+;        и draworder front": у выносок MLEADER фон стоял с 2026-07-15,
+;        у размерных линий не стоял вообще - Claude)
 ;   1.0  (LEP:SetLayerTrueColor - True Color подтверждён живым тестом
 ;        2026-07-22, применён к 4 слоям (0,4кВ Сущ. ВЛ/опоры, КЛ ГНБ/
 ;        Траншея) - Claude)
@@ -578,6 +582,13 @@
     (setvar "DIMTIH" *LEP-Dim-TextInsideHorizontal*)
     (setvar "DIMTOH" *LEP-Dim-TextOutsideHorizontal*)
     (setvar "DIMTAD" *LEP-Dim-TextAbove*)
+
+    ;; ✅ ДОБАВЛЕНО 2026-08-04: фон под текстом размера (DIMTFILL).
+    ;; У выносок MLEADER фон стоит с 2026-07-15, а у размерных линий
+    ;; не стоял вообще - держался дефолт AutoCAD "без фона", и поверх
+    ;; подосновы число размера читалось плохо. Разбор - в
+    ;; LEP-CONFIG.LSP, там же рядом с DIMTAD.
+    (setvar "DIMTFILL" *LEP-Dim-TextFill*)
 
     ;; Форма стрелки - "Oblique" (косая черта) вместо дефолтной
     ;; закрашенной стрелки, для First/Second/Leader сразу (диалог

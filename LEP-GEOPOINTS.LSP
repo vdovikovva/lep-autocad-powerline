@@ -2,7 +2,12 @@
 ;
 ;   ПРОЕКТ:      LEP
 ;   ФАЙЛ:        LEP-GEOPOINTS.LSP
-;   ВЕРСИЯ:      0.2  (файлы переехали в папку ЧЕРТЕЖА (DWGPREFIX),
+;   ВЕРСИЯ:      0.3  (2026-08-04: кружок и подпись геоточки поднимаются
+;                наверх - LEP:BringToFront, как все остальные подписи
+;                проекта. Найдено аудитом draworder; геоточки нужны
+;                ровно чтобы сверять их с подосновой, уйдя под неё они
+;                теряют смысл - Claude)
+;                0.2  (файлы переехали в папку ЧЕРТЕЖА (DWGPREFIX),
 ;                вместо папки geojson; DRAW больше не спрашивает файл
 ;                диалогом; EXTRACT создаёт пустой geopoints-converted.txt
 ;                - Claude, 2026-07-20, по просьбе пользователя после
@@ -372,16 +377,32 @@
                                 )
                             )
 
+                            ;; ✅ ДОБАВЛЕНО 2026-08-04 (аудит "у всех
+                            ;; подписей должен стоять draworder front"):
+                            ;; кружок и его подпись поднимаются НАВЕРХ,
+                            ;; как все остальные подписи проекта. Здесь
+                            ;; это особенно уместно: геоточки нужны
+                            ;; ровно для того, чтобы СВЕРИТЬ их с
+                            ;; подосновой, а подоснова - самый плотный
+                            ;; слой на чертеже; уйдя под неё, кружок
+                            ;; теряет весь смысл.
+                            ;; entmake возвращает список, а не ename,
+                            ;; поэтому объект берём через (entlast).
+                            (LEP:BringToFront (entlast))
+
                             (if (/= Name "")
-                                (entmake
-                                    (list
-                                        (cons 0 "TEXT")
-                                        (cons 8 *LEP-Layer-GeoPoints*)
-                                        (cons 10 LabelPt)
-                                        (cons 40 *LEP-TextHeight*)
-                                        (cons 1 Name)
-                                        (cons 7 *LEP-TextStyle-Name*)
+                                (progn
+                                    (entmake
+                                        (list
+                                            (cons 0 "TEXT")
+                                            (cons 8 *LEP-Layer-GeoPoints*)
+                                            (cons 10 LabelPt)
+                                            (cons 40 *LEP-TextHeight*)
+                                            (cons 1 Name)
+                                            (cons 7 *LEP-TextStyle-Name*)
+                                        )
                                     )
+                                    (LEP:BringToFront (entlast))
                                 )
                             )
 
