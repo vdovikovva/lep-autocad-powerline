@@ -1208,21 +1208,81 @@
 )
 
 
-(defun LEP:CreateSpanLabel (SubVerts WireName SpanLen Status Method / MidPt TextPt LabelText MethodLine OldLayer FirstPt LastPt StatusText)
+;=====================================================================
+; LEP:GetLongestSegmentMid     (НОВАЯ 2026-08-06)
+;
+; Возвращает СЕРЕДИНУ САМОГО ДЛИННОГО ПРЯМОГО УЧАСТКА ломаной - точку,
+; к которой цепляется общая подпись пролёта.
+;
+; ЗАЧЕМ (баг, найденный пользователем 2026-08-06 на тестовой сцене, но
+; замеченный им ещё раньше на рабочих чертежах). Раньше подпись
+; цеплялась к СЕРЕДИНЕ ПРЯМОЙ между первым и последним концом группы -
+; то есть к среднему арифметическому двух координат. На прямом пролёте
+; эта точка лежит на линии, и всё выглядело правильно. Но стоит
+; маршруту согнуться - и середина отрезка "начало-конец" оказывается
+; В СТОРОНЕ ОТ САМОЙ ЛИНИИ, тем дальше, чем круче излом. У маршрута с
+; поворотом почти на 90° подпись уезжала в пустоту и висела в воздухе,
+; а выноска тянулась к точке, где никакого провода нет.
+;
+; ПОЧЕМУ ИМЕННО САМЫЙ ДЛИННЫЙ УЧАСТОК, а не середина пути вдоль трассы
+; (решение пользователя 2026-08-06). Середина пути тоже всегда лежит на
+; линии и этим лучше старого варианта - но на Г-образном маршруте она
+; попадает на поворотный кусок, то есть на короткую перемычку сбоку.
+; Самый длинный участок - это почти всегда магистральный кусок, и
+; подпись садится туда, где её ищут глазами.
+;
+; ⚠️ Вырожденный случай (меньше двух точек) возвращает первую точку -
+; подпись всё равно должна появиться, пусть и не в идеальном месте.
+; Молча не создать подпись было бы хуже: пролёт выпал бы из
+; объединения групп, и следующий пересчёт его не нашёл бы.
+;=====================================================================
+
+(defun LEP:GetLongestSegmentMid (Pts / i A B L BestL BestMid)
+
+    (setq i 0)
+    (setq BestL -1.0)
+    (setq BestMid nil)
+
+    (while (< i (1- (length Pts)))
+
+        (setq A (nth i Pts))
+        (setq B (nth (1+ i) Pts))
+        (setq L (distance A B))
+
+        (if (> L BestL)
+            (progn
+                (setq BestL L)
+                (setq BestMid
+                    (list
+                        (/ (+ (car A) (car B)) 2.0)
+                        (/ (+ (cadr A) (cadr B)) 2.0)
+                    )
+                )
+            )
+        )
+
+        (setq i (1+ i))
+    )
+
+    (if BestMid BestMid (car Pts))
+)
+
+
+(defun LEP:CreateSpanLabel (SubVerts WireName SpanLen Status Method / MidPt TextPt LabelText MethodLine OldLayer StatusText)
 
     (setq OldLayer (getvar "CLAYER"))
     (LEP:SetCurrentLayer *LEP-Layer-Text*)
- 
-    (setq FirstPt (car SubVerts))
-    (setq LastPt (last SubVerts))
- 
-    (setq MidPt
-        (list
-            (/ (+ (car FirstPt) (car LastPt)) 2.0)
-            (/ (+ (cadr FirstPt) (cadr LastPt)) 2.0)
-        )
-    )
- 
+
+    ;; ⚠️ ИЗМЕНЕНО 2026-08-06: было среднее арифметическое первой и
+    ;; последней точки - подпись висела в воздухе на любом изогнутом
+    ;; маршруте. Подробное обоснование - в шапке LEP:GetLongestSegmentMid
+    ;; выше.
+    ;; ⚠️ Работает, только если сюда передан ВЕСЬ список вершин группы.
+    ;; До этой правки вызывающая сторона передавала ровно ДВЕ точки
+    ;; (начало и конец), и промежуточных вершин функция не видела в
+    ;; принципе - см. LEP:FinalizeSpanLabel.
+    (setq MidPt (LEP:GetLongestSegmentMid SubVerts))
+
     (setq TextPt
         (list
             (+ (car MidPt) *LEP-LeaderOffset*)
@@ -1547,7 +1607,7 @@
 ; вдоль трассы (см. п.6 выше).
 ;=====================================================================
 
-(defun LEP:FinalizeSpanLabel (SpanEnt Verts P1Handle P2Handle TypeCode WireName Status / Method Neighbors N NP1 NP2 IsTwin MatchGroup AllMembers M OldHandles H OldEnt RawTotal ReserveTotal RStr Pt Idx BestIdx BestPt WorstIdx WorstPt GroupFirst GroupLast NewLabelEnt NewLabelHandle DisplayLen)
+(defun LEP:FinalizeSpanLabel (SpanEnt Verts P1Handle P2Handle TypeCode WireName Status / Method Neighbors N NP1 NP2 IsTwin MatchGroup AllMembers M OldHandles H OldEnt RawTotal ReserveTotal RStr Pt Idx BestIdx BestPt WorstIdx WorstPt GroupFirst GroupLast GroupVerts NewLabelEnt NewLabelHandle DisplayLen)
 
     ;; Способ прокладки берём из XDATA самого пролёта, а не отдельным
     ;; аргументом: XDATA пролёта записывается ДО вызова этой функции,
@@ -1714,7 +1774,25 @@
     ;; имеют ТОТ ЖЕ способ: с 2026-07-24 METHOD входит в условие
     ;; объединения (см. выше), поэтому подпись с "методом ГНБ" физически
     ;; не может накрыть траншейный участок.
-    (setq NewLabelEnt (LEP:CreateSpanLabel (list GroupFirst GroupLast) WireName DisplayLen Status Method))
+    ;; ⚠️ ИЗМЕНЕНО 2026-08-06: передаём ВЕСЬ участок вершин группы
+    ;; (LEP:SubList между крайними индексами), а не две крайние точки.
+    ;; Раньше сюда уходило ровно (GroupFirst GroupLast) - и подпись
+    ;; физически не могла сесть на линию: промежуточных вершин функция
+    ;; не видела, и ей оставалось только усреднить две координаты.
+    ;; На изогнутом маршруте такая "середина" оказывается в стороне от
+    ;; линии, и подпись висит в воздухе.
+    ;;
+    ;; Подстраховка на вырожденный случай: если по индексам получилось
+    ;; меньше двух точек (BestIdx = WorstIdx - обе крайние точки группы
+    ;; сели на одну вершину), берём прежние две точки. Подпись при этом
+    ;; встанет как раньше - хуже, но она БУДЕТ. Молча остаться без
+    ;; подписи нельзя: пролёт выпал бы из объединения групп.
+    (setq GroupVerts (LEP:SubList Verts BestIdx WorstIdx))
+    (if (< (length GroupVerts) 2)
+        (setq GroupVerts (list GroupFirst GroupLast))
+    )
+
+    (setq NewLabelEnt (LEP:CreateSpanLabel GroupVerts WireName DisplayLen Status Method))
     (setq NewLabelHandle (cdr (assoc 5 (entget NewLabelEnt))))
 
     (foreach M AllMembers
