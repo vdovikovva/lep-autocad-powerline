@@ -215,7 +215,7 @@
 ; отстоят от его линии на 0,4 и 0,3 м - см. пункты 1 и 2 в шапке файла.
 ;=====================================================================
 
-(defun C:LEP-TEST-SCENE (/ OldOs OldLayer R1 R2 Route1 ID1 Route2 ID2
+(defun C:LEP-TEST-SCENE (/ OldOs OldLayer R1 R2 Route1 ID1 Route2 ID2 Dx P
                            VClass ClassLabel TpPt InsertResult Pt1 KtpEnt)
 
     (LEP:PrintHeader "ТЕСТОВАЯ СЦЕНА: два маршрута с общим участком")

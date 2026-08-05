@@ -225,7 +225,7 @@
 ; концы отрезка маршрута под ней (для разворота символа опоры).
 ;=====================================================================
 
-(defun LEP:InsertVertexOnRoute (RouteEnt ClickPoint / Verts Found Idx NewPt SegStart SegEnd NewVerts i V NewEList Item VertexInserted)
+(defun LEP:InsertVertexOnRoute (RouteEnt ClickPoint / Verts Found Idx NewPt SegStart SegEnd NewVerts i V NV NewEList Item VertexInserted)
 
     (setq Verts (LEP:GetVertices RouteEnt))
     (setq Found (LEP:FindNearestSegment Verts ClickPoint))

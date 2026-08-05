@@ -93,7 +93,7 @@
 ; = ByBlock, а не какое-то конкретное число.
 ;=====================================================================
 
-(defun LEP:CreatePoleSymbolBlock (/ HalfBase HalfTop HalfHeight HalfCross Verts TrapList)
+(defun LEP:CreatePoleSymbolBlock (/ HalfBase HalfTop HalfHeight HalfCross Verts TrapList V)
 
     (if (not (tblsearch "BLOCK" *LEP-Block-Pole*))
         (progn

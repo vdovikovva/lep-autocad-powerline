@@ -61,7 +61,7 @@
 ; опоры).
 ;=====================================================================
 
-(defun LEP:CreateKtpSymbolBlock (/ HalfW HalfH RectVerts RectList TriLeft TriRight TriBottom)
+(defun LEP:CreateKtpSymbolBlock (/ HalfW HalfH RectVerts RectList TriLeft TriRight TriBottom V)
 
     (if (not (tblsearch "BLOCK" *LEP-Block-Ktp*))
         (progn
