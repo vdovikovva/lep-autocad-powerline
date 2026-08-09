@@ -104,6 +104,10 @@ before, what was tried and rejected. That is the point of them, not bloat.
 Detailed documentation, the full change history and known rough edges live in
 [LEP-README.md](LEP-README.md) (in Russian).
 
+## Contact
+
+Licensing, questions, bug reports: **vdovikov@me.com** or an issue here.
+
 ## Status
 
 ~12 400 lines of AutoLISP, in daily production use. Known rough edges are
@@ -115,6 +119,7 @@ is that strut rotation on two- and three-stand poles is still an approximation.
 **Source-available, not open source.** You may read and study the code; any
 use — including running it, modifying it or producing drawings with it —
 requires a written licence from the author. Commercial and non-commercial
-licences are available: open an issue and describe how you intend to use it.
+licences are available: write to **vdovikov@me.com** describing how you intend
+to use it, or open an issue.
 
 Full terms: [LICENSE](LICENSE) (English) · [LICENSE.ru](LICENSE.ru) (Russian).
