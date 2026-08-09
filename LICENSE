@@ -1,0 +1,53 @@
+Copyright (c) 2026 Viktor Vdovikov. All rights reserved.
+
+This software is source-available, not open source.
+It is NOT free software, and no rights are granted by default.
+
+
+WHAT YOU MAY DO WITHOUT ASKING
+
+  1. Read the source code published in this repository.
+  2. Study how it works and learn from it.
+  3. Quote short excerpts with attribution, for teaching, review or
+     discussion.
+
+
+WHAT REQUIRES A WRITTEN LICENCE FROM THE AUTHOR
+
+  Everything else. In particular, and without limitation:
+
+  1. Running this software, in whole or in part, for any purpose —
+     including personal, internal, educational and commercial use.
+  2. Copying, modifying, translating or creating derivative works.
+  3. Distributing, sublicensing, selling or otherwise making the
+     software or any derivative available to third parties.
+  4. Using the software, or any part of it, to produce drawings,
+     documentation or any other deliverable, whether or not that
+     deliverable is sold.
+
+
+HOW TO OBTAIN A LICENCE
+
+  Commercial and non-commercial licences are available from the author.
+  Open an issue in this repository to start the conversation, stating
+  how you intend to use the software.
+
+
+NO WARRANTY
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+  NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
+  CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+  TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+  SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  This software drives a CAD application and produces engineering
+  drawings. The author does not warrant that its output complies with
+  any standard, regulation or design norm. Verification of every
+  drawing remains entirely with the engineer who signs it.
+
+
+Русская версия этой лицензии — в файле LICENSE.ru.
+В случае расхождений преимущественную силу имеет русский текст.
