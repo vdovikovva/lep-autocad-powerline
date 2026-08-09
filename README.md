@@ -1,125 +1,124 @@
-# LEP — power line drafting for AutoCAD
+# LEP — черчение ЛЭП в AutoCAD
 
-**Русская версия: [README.ru.md](README.ru.md)**
+**English version: [README.en.md](README.en.md)**
 
-A set of AutoLISP modules that automate drafting of overhead and underground
-power lines in AutoCAD 2025 (macOS and Windows): route tracing, pole placement,
-span cutting, cable trenches, transformer substations and a bill of materials
-exported to CSV.
+Набор AutoLISP-модулей для автоматизации черчения воздушных и кабельных линий
+электропередач в AutoCAD 2025 (macOS и Windows): трассировка маршрута,
+расстановка опор, нарезка пролётов, кабельные траншеи, подстанции и выгрузка
+ведомости в CSV.
 
-Built for a real contractor's workflow — the kind of drawing you produce when
-connecting a customer to the grid: a cadastral map screenshot as an underlay,
-a traced route on top of it, poles along the route, spans between them, and a
-report at the end.
+Сделано под реальную работу подрядчика: такой чертёж выпускают при
+техприсоединении заявителя к сетям — скриншот кадастровой карты подложкой,
+поверх него трасса, вдоль трассы опоры, между ними пролёты, в конце ведомость.
 
 ```
 LEP-SCALE  →  LEP-ROUTE  →  LEP-POLE  →  LEP-SPAN  →  LEP-END  →  LEP-REPORT
-calibrate     trace the     place the    wire the     terminate   export the
-the underlay  route         poles        spans        the line    bill
+калибровка    маршрут       опоры        пролёты      окончание   ведомость
+подложки                                              линии
 ```
 
-## What it does
+## Что умеет
 
-- **Scale calibration** — pick two points with a known real distance, and one
-  AutoCAD unit becomes one metre. The underlay is moved to its own layer and
-  pushed to the back of the draw order.
-- **Route tracing** — a polyline on a service layer with a voltage class
-  (10 kV / 6 kV / 0.4 kV) stored in XDATA. Every route gets its own ID, so a
-  single drawing can hold several lines to different customers.
-- **Pole placement** — click near the route and the point is projected onto it;
-  from the second pole on you can type the distance from the previous one with
-  a sign instead of clicking. Pole type, status (planned or existing) and a
-  two-line label come from the route's voltage class. Anchor and corner types
-  automatically get their struts drawn.
-- **Spans** — wire brand and cross-section per span, with the length taken from
-  the geometry, plus slack allowances by norm and pipes for horizontal
-  directional drilling.
-- **Cable sections** — trenches with dimensions per leg, cable kiosks, and a
-  marker for the point where the laying method changes.
-- **Substations** — pole-mounted, ground-level and pad-mounted transformers
-  (МТП / КТП / СТП) with labels.
-- **GPS points** — import from GeoJSON and draw as reference circles.
-- **Bill of materials** — `LEP-REPORT` walks the drawing and writes a CSV with
-  poles by stand type, spans by wire brand, and cable lengths.
+- **Калибровка масштаба** — две точки с известным реальным расстоянием, и одна
+  единица AutoCAD становится метром. Подложка сама переезжает на свой слой и
+  уходит в конец порядка отрисовки, чтобы не перекрывать чертёж.
+- **Трассировка маршрута** — полилиния на служебном слое с классом напряжения
+  (10 кВ / 6 кВ / 0,4 кВ) в XDATA. У каждого маршрута свой ID, поэтому на одном
+  чертеже спокойно живут несколько линий к разным заявителям.
+- **Расстановка опор** — клик рядом с трассой, точка проецируется на неё; со
+  второй опоры расстояние от предыдущей можно вводить числом со знаком вместо
+  клика на глаз. Тип опоры, статус (проектируемая или существующая) и
+  двухстрочная подпись подтягиваются из класса напряжения маршрута. У анкерных
+  и угловых типов откосы рисуются сами.
+- **Пролёты** — марка и сечение провода на каждый пролёт, длина берётся из
+  геометрии, плюс нормы запаса и труба для ГНБ-прокола.
+- **Кабельные участки** — траншеи с размерами по коленам, кабельные киоски,
+  маркер точки смены способа прокладки.
+- **Подстанции** — мачтовые, наземные и столбовые (МТП / КТП / СТП) с подписями.
+- **GPS-точки** — импорт из GeoJSON и отрисовка кружками-ориентирами.
+- **Ведомость** — `LEP-REPORT` обходит чертёж и пишет CSV: опоры по типам
+  стоек, пролёты по маркам провода, длины кабеля.
 
-## Install
+## Установка
 
-1. Put the whole folder anywhere on disk.
-2. Add that folder to AutoCAD's Support File Search Path
-   (*Options → Files → Support File Search Path*). One-time setup per machine.
-3. Open any drawing. `acaddoc.lsp` loads `LEP-START.LSP` automatically and
-   creates all project layers.
+1. Положите папку куда угодно на диск.
+2. Добавьте её в Support File Search Path AutoCAD
+   (*Options → Files → Support File Search Path*). Разовая настройка на
+   компьютер, не на каждый чертёж.
+3. Откройте любой чертёж. `acaddoc.lsp` сам подхватит `LEP-START.LSP` и создаст
+   все слои проекта.
 
-To reload after editing the code without reopening the drawing: `APPLOAD` →
+Перезагрузить код после правок без переоткрытия чертежа: `APPLOAD` →
 `LEP-START.LSP`.
 
-## Commands
+## Команды
 
-| Command | What it does |
+| Команда | Что делает |
 |---|---|
-| `LEP-SCALE` | calibrate the underlay scale by two points |
-| `LEP-ROUTE` | trace the route, pick the voltage class |
-| `LEP-ROUTEVIS` | show/hide the service route line |
-| `LEP-POLE` | place poles along the route in a loop |
-| `LEP-POLE-ALONE` | place a single pole not bound to any route |
-| `LEP-POLE-MOVE` / `LEP-POLE-DELETE` | move or delete a pole with its label and struts |
-| `LEP-SPAN` | wire the spans between poles |
-| `LEP-SPAN-REPAIR` | rebuild span data after manual edits |
-| `LEP-END` | terminate the line — substation, meter box, kiosk |
-| `LEP-GEOPOINTS-EXTRACT` / `-DRAW` / `-CLEAR` | GPS points from GeoJSON |
-| `LEP-REPORT` | export the bill of materials to CSV |
-| `LEP-TEST-SCENE` | generate a test drawing to try things out |
+| `LEP-SCALE` | калибровка масштаба подложки по двум точкам |
+| `LEP-ROUTE` | черчение маршрута, выбор класса напряжения |
+| `LEP-ROUTEVIS` | показать/скрыть служебную линию маршрута |
+| `LEP-POLE` | расстановка опор вдоль трассы в цикле |
+| `LEP-POLE-ALONE` | одиночная опора без привязки к маршруту |
+| `LEP-POLE-MOVE` / `LEP-POLE-DELETE` | перенос и удаление опоры вместе с подписью и откосами |
+| `LEP-SPAN` | нарезка пролётов между опорами |
+| `LEP-SPAN-REPAIR` | пересборка данных пролёта после ручных правок |
+| `LEP-END` | окончание линии — подстанция, ЩУ, киоск |
+| `LEP-GEOPOINTS-EXTRACT` / `-DRAW` / `-CLEAR` | GPS-точки из GeoJSON |
+| `LEP-REPORT` | выгрузка ведомости в CSV |
+| `LEP-TEST-SCENE` | тестовый чертёж, чтобы всё попробовать |
 
-## Repository layout
+## Что где лежит
 
 ```
-acaddoc.lsp        AutoCAD autoloader — pulls in LEP-START on any drawing
-LEP-START.LSP      loads every module, registers the trusted path
-LEP-SETUP.LSP      creates all project layers and the text style
-LEP-CONFIG.LSP     every tunable: colours, layers, pole types, wire brands
-LEP-DATA.LSP       XDATA read/write — the drawing itself is the database
-LEP-ROUTE.LSP      route tracing
-LEP-POLE.LSP       pole placement, LEP-POLE.DCL — the optional dialog
-LEP-SPAN.LSP       spans and wires
-LEP-END.LSP        line termination
-LEP-REPORT.LSP     bill of materials
-LEP-*SYM.LSP       symbols: poles, transformers, kiosks
-LEP-GEOPOINTS.LSP  GeoJSON import
-LEP-POLYLINE.LSP   polyline geometry helpers
-LEP-UTILS.LSP      shared helpers
-LEP-SCALE.LSP      scale calibration
-LEP-TEST-SCENE.LSP test drawing generator
+acaddoc.lsp        автозагрузчик AutoCAD — тянет LEP-START на любом чертеже
+LEP-START.LSP      грузит все модули, регистрирует доверенный путь
+LEP-SETUP.LSP      создаёт слои проекта и текстовый стиль
+LEP-CONFIG.LSP     все настройки: цвета, слои, типы опор, марки проводов
+LEP-DATA.LSP       чтение/запись XDATA — база данных живёт в самом чертеже
+LEP-ROUTE.LSP      трассировка маршрута
+LEP-POLE.LSP       опоры, LEP-POLE.DCL — необязательный диалог выбора
+LEP-SPAN.LSP       пролёты и провода
+LEP-END.LSP        окончание линии
+LEP-REPORT.LSP     ведомость
+LEP-*SYM.LSP       символы: опоры, трансформаторы, киоски
+LEP-GEOPOINTS.LSP  импорт GeoJSON
+LEP-POLYLINE.LSP   геометрия полилиний
+LEP-UTILS.LSP      общие функции
+LEP-SCALE.LSP      калибровка масштаба
+LEP-TEST-SCENE.LSP генератор тестового чертежа
 ```
 
-There is no database and no external storage: everything the program knows
-lives in the drawing itself, in XDATA attached to entities.
+Ни базы данных, ни внешних хранилищ: всё, что программа знает, лежит в самом
+чертеже — в XDATA объектов.
 
-## A note on the comments
+## Про комментарии в коде
 
-The code is heavily commented, and deliberately so. The author is not a
-programmer, and the comments explain not only *what* a function does but *why*
-it does it that way — which AutoCAD behaviour forced the decision, what broke
-before, what was tried and rejected. That is the point of them, not bloat.
+Комментариев в коде много, и это намеренно. Автор не программист, поэтому они
+объясняют не только *что* делает функция, но и *почему* именно так: какое
+поведение AutoCAD вынудило это решение, что ломалось раньше, что пробовали и
+отбросили. Это не раздутость, а смысл — сокращать их не надо.
 
-Detailed documentation, the full change history and known rough edges live in
-[LEP-README.md](LEP-README.md) (in Russian).
+Подробная документация, полная история правок и известные шероховатости — в
+[LEP-README.md](LEP-README.md).
 
-## Contact
+## Связь
 
-Licensing, questions, bug reports: **vdovikov@me.com** or an issue here.
+Лицензирование, вопросы, баг-репорты: **vdovikov@me.com** или issue здесь.
 
-## Status
+## Состояние
 
-~12 400 lines of AutoLISP, in daily production use. Known rough edges are
-listed at the top of [LEP-README.md](LEP-README.md) — the most important one
-is that strut rotation on two- and three-stand poles is still an approximation.
+~12 400 строк AutoLISP, используется в работе каждый день. Известные
+шероховатости перечислены вверху [LEP-README.md](LEP-README.md) — главная из
+них: разворот откосов у двух- и трёхстоечных опор пока черновое приближение.
 
-## License
+## Лицензия
 
-**Source-available, not open source.** You may read and study the code; any
-use — including running it, modifying it or producing drawings with it —
-requires a written licence from the author. Commercial and non-commercial
-licences are available: write to **vdovikov@me.com** describing how you intend
-to use it, or open an issue.
+**Код открыт для просмотра, но это не свободное ПО.** Читать и изучать —
+можно. Любое использование, включая запуск, изменение и выпуск чертежей с
+её помощью, требует письменной лицензии автора. Автор выдаёт коммерческие и
+некоммерческие лицензии: напишите на **vdovikov@me.com** и опишите, как
+собираетесь использовать программу, либо откройте issue.
 
-Full terms: [LICENSE](LICENSE) (English) · [LICENSE.ru](LICENSE.ru) (Russian).
+Полный текст: [LICENSE.ru](LICENSE.ru) (русский) · [LICENSE](LICENSE)
+(английский).
