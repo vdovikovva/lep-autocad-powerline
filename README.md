@@ -83,7 +83,7 @@ LEP-POLE.LSP       pole placement, LEP-POLE.DCL — the optional dialog
 LEP-SPAN.LSP       spans and wires
 LEP-END.LSP        line termination
 LEP-REPORT.LSP     bill of materials
-LEP-*SYM.LSP       symbols: poles, transformers, kiosks
+LEP-*SYM.LSP       symbols: poles, transformers, kiosks, HDD pits
 LEP-GEOPOINTS.LSP  GeoJSON import
 LEP-POLYLINE.LSP   polyline geometry helpers
 LEP-UTILS.LSP      shared helpers

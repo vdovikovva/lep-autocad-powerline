@@ -81,7 +81,7 @@ LEP-POLE.LSP       опоры, LEP-POLE.DCL — необязательный д�
 LEP-SPAN.LSP       пролёты и провода
 LEP-END.LSP        окончание линии
 LEP-REPORT.LSP     ведомость
-LEP-*SYM.LSP       символы: опоры, трансформаторы, киоски
+LEP-*SYM.LSP       символы: опоры, трансформаторы, киоски, котлованы ГНБ
 LEP-GEOPOINTS.LSP  импорт GeoJSON
 LEP-POLYLINE.LSP   геометрия полилиний
 LEP-UTILS.LSP      общие функции
