@@ -102,7 +102,9 @@ it does it that way — which AutoCAD behaviour forced the decision, what broke
 before, what was tried and rejected. That is the point of them, not bloat.
 
 Detailed documentation, the full change history and known rough edges live in
-[LEP-README.md](LEP-README.md) (in Russian).
+[LEP-README.md](LEP-README.md) (in Russian). Whatever the program still does by
+guesswork, pending confirmation from an electrical engineer, is tracked
+separately in [LEP-QUESTIONS.md](LEP-QUESTIONS.md) (also in Russian).
 
 ## Contact
 
