@@ -536,11 +536,31 @@
 ; ⚠️ LEP-REPORT.LSP должен знать про EQUIPSTATUS отдельно от STATUS -
 ; см. отдельный скан слоя существующих опор там же.
 ;
+; ⚠️⚠️ ФИКС 2026-08-18 (баг найден по живому чертежу): локальная
+; переменная называлась Type - ИМЕНЕМ ВСТРОЕННОЙ ФУНКЦИИ AutoLISP
+; (type). Имена в AutoLISP регистронезависимы, а видимость локальных
+; переменных ДИНАМИЧЕСКАЯ: пока работает эта функция, символ TYPE
+; хранит строку "POLE", а не встроенную функцию - и она "выключена"
+; НЕ ТОЛЬКО здесь, но и во всём, что отсюда вызывается. Ниже по
+; цепочке стоит LEP:SetData -> LEP:SetDataValueToString, где есть
+; (type Value) - вызов падал с "bad function", XDATA не писалась
+; ВООБЩЕ, команда обрывалась.
+;
+; Ловушка тихая вдвойне: подпись "+ проект. ПУ ..." дописывалась в
+; выноску ДО этого вызова, поэтому на чертеже прибор выглядел
+; поставленным, а в ведомость не попадал - именно так ПУ и "перестали
+; считаться" (жил баг с 2026-07-28, когда в LEP:SetData появилась
+; проверка типа значения).
+;
+; ⚠️ ПРАВИЛО НА БУДУЩЕЕ: не называть переменные именами встроенных
+; функций (type, list, length, angle, distance, last, set, read...).
+; Ошибка не видна на глаз и всплывает в ЧУЖОЙ функции.
+;
 ;=====================================================================
 
-(defun LEP:AddEquipToExistingPole (PoleEnt EquipCode EquipStatus / Type Route Model Status LabelHandle)
+(defun LEP:AddEquipToExistingPole (PoleEnt EquipCode EquipStatus / ObjType Route Model Status LabelHandle)
 
-    (setq Type        (LEP:GetDataValue PoleEnt "TYPE"))
+    (setq ObjType     (LEP:GetDataValue PoleEnt "TYPE"))
     (setq Route       (LEP:GetDataValue PoleEnt "ROUTE"))
     (setq Model       (LEP:GetDataValue PoleEnt "MODEL"))
     (setq Status      (LEP:GetDataValue PoleEnt "STATUS"))
@@ -549,7 +569,7 @@
     (LEP:SetData
         PoleEnt
         (list
-            (cons "TYPE" Type)
+            (cons "TYPE" ObjType)
             (cons "ROUTE" Route)
             (cons "MODEL" Model)
             (cons "STATUS" Status)
@@ -728,9 +748,14 @@
 ;
 ;=====================================================================
 
-(defun LEP:ReassignPoleRoute (Ent NewRouteID / Type Model Status LabelHandle EquipCode EquipStatus DataList)
+;; ⚠️ 2026-08-18: локальная переменная переименована Type -> ObjType.
+;; Type - имя ВСТРОЕННОЙ функции AutoLISP, а локальные переменные тут
+;; видны и во всех вызываемых функциях (динамическая видимость) -
+;; LEP:SetData ниже падала бы с "bad function". Подробный разбор - в
+;; шапке LEP:AddEquipToExistingPole выше.
+(defun LEP:ReassignPoleRoute (Ent NewRouteID / ObjType Model Status LabelHandle EquipCode EquipStatus DataList)
 
-    (setq Type        (LEP:GetDataValue Ent "TYPE"))
+    (setq ObjType     (LEP:GetDataValue Ent "TYPE"))
     (setq Model       (LEP:GetDataValue Ent "MODEL"))
     (setq Status      (LEP:GetDataValue Ent "STATUS"))
     (setq LabelHandle (LEP:GetDataValue Ent "LABELHANDLE"))
@@ -739,7 +764,7 @@
 
     (setq DataList
         (list
-            (cons "TYPE" Type)
+            (cons "TYPE" ObjType)
             (cons "ROUTE" NewRouteID)
             (cons "MODEL" Model)
             (cons "STATUS" Status)
@@ -756,12 +781,16 @@
 )
 
 
-(defun LEP:ReassignSpanRoute (Ent NewRouteID / Status Wire Section Length RawLength Reserve Pole1 Pole2 LabelHandle Method DataList)
+;; ⚠️ 2026-08-18: Length -> LengthVal по той же причине, что и Type
+;; выше (length - встроенная функция AutoLISP). Здесь она пока никем
+;; ниже по цепочке не вызывалась, то есть не стреляло - но это была
+;; заряженная мина, а не безобидное имя.
+(defun LEP:ReassignSpanRoute (Ent NewRouteID / Status Wire Section LengthVal RawLength Reserve Pole1 Pole2 LabelHandle Method DataList)
 
     (setq Status     (LEP:GetDataValue Ent "STATUS"))
     (setq Wire       (LEP:GetDataValue Ent "WIRE"))
     (setq Section    (LEP:GetDataValue Ent "SECTION"))
-    (setq Length     (LEP:GetDataValue Ent "LENGTH"))
+    (setq LengthVal  (LEP:GetDataValue Ent "LENGTH"))
     (setq RawLength  (LEP:GetDataValue Ent "RAWLENGTH"))
     (setq Reserve    (LEP:GetDataValue Ent "RESERVE"))
     (setq Pole1      (LEP:GetDataValue Ent "POLE1HANDLE"))
@@ -776,7 +805,7 @@
             (cons "STATUS" Status)
             (cons "WIRE" Wire)
             (cons "SECTION" Section)
-            (cons "LENGTH" Length)
+            (cons "LENGTH" LengthVal)
         )
     )
     ;; Поля, добавленные позже (2026-07-22 - объединение подписей
@@ -815,13 +844,14 @@
 ;
 ;=====================================================================
 
-(defun LEP:SetSpanLabelHandle (Ent NewLabelHandle / Status Wire Section Length RawLength Reserve Pole1 Pole2 Method RouteID)
+;; ⚠️ 2026-08-18: Length -> LengthVal - см. LEP:ReassignSpanRoute выше.
+(defun LEP:SetSpanLabelHandle (Ent NewLabelHandle / Status Wire Section LengthVal RawLength Reserve Pole1 Pole2 Method RouteID)
 
     (setq RouteID    (LEP:GetDataValue Ent "ROUTE"))
     (setq Status     (LEP:GetDataValue Ent "STATUS"))
     (setq Wire       (LEP:GetDataValue Ent "WIRE"))
     (setq Section    (LEP:GetDataValue Ent "SECTION"))
-    (setq Length     (LEP:GetDataValue Ent "LENGTH"))
+    (setq LengthVal  (LEP:GetDataValue Ent "LENGTH"))
     (setq RawLength  (LEP:GetDataValue Ent "RAWLENGTH"))
     ;; ⚠️ ДОБАВЛЕНО 2026-07-24 - и это НЕ мелочь: эта функция вызывается
     ;; ПОСЛЕ КАЖДОГО объединения подписей, то есть практически у каждого
@@ -845,7 +875,7 @@
                 (cons "STATUS" Status)
                 (cons "WIRE" Wire)
                 (cons "SECTION" Section)
-                (cons "LENGTH" Length)
+                (cons "LENGTH" LengthVal)
                 (cons "RAWLENGTH" RawLength)
                 (cons "POLE1HANDLE" Pole1)
                 (cons "POLE2HANDLE" Pole2)
