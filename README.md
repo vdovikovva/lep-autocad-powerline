@@ -60,6 +60,7 @@ To reload after editing the code without reopening the drawing: `APPLOAD` →
 | `LEP-SCALE` | calibrate the underlay scale by two points |
 | `LEP-ROUTE` | trace the route, pick the voltage class |
 | `LEP-ROUTEVIS` | show/hide the service route line |
+| `LEP-ROUTE-CLEAN` | clean up stray route vertices sitting next to poles |
 | `LEP-POLE` | place poles along the route in a loop |
 | `LEP-POLE-ALONE` | place a single pole not bound to any route |
 | `LEP-POLE-MOVE` / `LEP-POLE-DELETE` | move or delete a pole with its label and struts |

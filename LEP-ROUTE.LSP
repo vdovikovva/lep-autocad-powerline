@@ -445,6 +445,230 @@
 )
 
 
-(princ "\nLEP-ROUTE v1.0 загружен (Escape во время PLINE больше не срывает создание маршрута молча).")
+
+;=====================================================================
+; C:LEP-ROUTE-CLEAN - УБОРКА ПАРАЗИТНЫХ ВЕРШИН МАРШРУТА
+;
+; ✅ ДОБАВЛЕНО 2026-08-20 по просьбе пользователя, вторая половина
+; правки про лишние размеры (первая - LEP:CollapseDimVertices в
+; LEP-SPAN.LSP).
+;
+; ОТКУДА БЕРУТСЯ ПАРАЗИТНЫЕ ВЕРШИНЫ. Угловая опора почти всегда
+; ставится рядом с изломом, который пользователь нарисовал руками. А
+; снап "это та же самая точка" в LEP:InsertVertexOnRoute -
+; *LEP-Vertex-Snap-Tolerance*, ВСЕГО 10 СМ. Клик мимо излома на
+; полметра - и в маршруте появляется ВТОРАЯ вершина рядом с первой.
+; На живом чертеже пользователя из 26 вершин пять оказались такими
+; парами (0,13-0,80 м друг от друга).
+;
+; ЧЕМ ОНИ МЕШАЮТ. Сами по себе - почти ничем: длина считается как
+; сумма отрезков и от лишней вершины не меняется, провод рисуется по
+; той же трассе. Мешают они РАЗМЕРАМ - каждый участок между вершинами
+; получал свою размерную линию, и рядом с "30 м" вылезало "1 м".
+; С 2026-08-20 размеры от этого защищены схлопыванием
+; (LEP:CollapseDimVertices), так что эта команда - уборка ради
+; порядка, а не обязательный шаг.
+;
+; ЧТО УДАЛЯЕТСЯ. Вершина удаляется, только если ВЫПОЛНЕНО ВСЁ:
+;   - в ней НЕ стоит узловой блок (опора, КТП, киоск, маркер) -
+;     проверка LEP:VertexHasNode, допуск *LEP-Dim-NodeSnap*;
+;   - рядом (ближе *LEP-Dim-NodeGap*) есть другая вершина, в которой
+;     блок СТОИТ - то есть это именно "лишний близнец опоры";
+;   - это не первая и не последняя вершина маршрута.
+; Одиночный излом трассы без опоры под ним НЕ ТРОГАЕТСЯ: это
+; настоящий поворот, и размер по нему нужен.
+;
+; ⚠️ ГЛАВНЫЙ РИСК - GEOMCONSTRAINT. Опоры привязаны к вершинам
+; маршрута связью _COincident (LEP:PlacePoleOnRoute). Мы удаляем
+; только вершины БЕЗ блока, то есть заведомо не те, за которые
+; кто-то держится. Но список вершин полилинии при этом перестраивается
+; целиком (entmod), а как решатель ограничений AutoCAD переживает
+; сдвиг индексов - живьём НЕ ПРОВЕРЕНО. Известно лишь, что обратная
+; операция (вставка вершины в середину списка тем же entmod) работает
+; годами - на ней держится вся расстановка опор.
+;
+; ПОЭТОМУ: команда спрашивает подтверждение, работает с ОДНИМ
+; маршрутом за раз и прямо просит проверить после себя, не съехали ли
+; опоры. Если съехали - Ctrl+Z (одна операция entmod откатывается
+; целиком).
+;
+; ⚠️ ЧЕГО КОМАНДА НЕ ДЕЛАЕТ: не трогает уже нарисованные размеры и
+; подписи. Они лежат на чертеже как есть - "уже начерченное задним
+; числом не пересчитывается", общее правило проекта. Лишний размер
+; "1 м" после уборки надо стереть руками (или перечертить пролёт).
+;=====================================================================
+
+(defun C:LEP-ROUTE-CLEAN (/ PickEnt Route RouteID Verts Nodes N i j Kill
+                            HasNodeNear Answer NewVerts Item Data NewData
+                            VIdx Skip Removed)
+
+    (LEP:PrintHeader "Уборка лишних вершин маршрута")
+
+    ;; Кликаем по ПРОЛЁТУ, а не по самой трассе: слой маршрутов обычно
+    ;; скрыт (LEP-ROUTEVIS), а провод виден всегда. Если пользователь
+    ;; всё же включил слой и кликнул по трассе - принимаем и её.
+    (setq PickEnt (car (entsel "\n[LEP-ROUTE-CLEAN] Клик по пролёту нужного маршрута (или по самой трассе): ")))
+
+    (cond
+
+        ((not PickEnt)
+            (princ "\n[LEP-ROUTE-CLEAN] Отменено.")
+            (LEP:PrintFooter)
+        )
+
+        (t
+            (cond
+                ;; Кликнули по самой полилинии маршрута.
+                ((= (LEP:GetDataValue PickEnt "TYPE") "ROUTE")
+                    (setq Route PickEnt)
+                    (setq RouteID (LEP:GetDataValue PickEnt "ID"))
+                )
+                ;; Кликнули по пролёту - берём маршрут из его XDATA.
+                ((= (LEP:GetDataValue PickEnt "TYPE") "SPAN")
+                    (setq RouteID (LEP:GetDataValue PickEnt "ROUTE"))
+                    (setq Route (if RouteID (LEP:FindRouteByID RouteID) nil))
+                )
+                (t (setq Route nil))
+            )
+
+            (if (not Route)
+                (progn
+                    (princ "\n[LEP-ROUTE-CLEAN] Это не пролёт и не трасса - маршрут не определён.")
+                    (LEP:PrintFooter)
+                )
+                (progn
+
+                    (setq Verts (LEP:GetVertices Route))
+                    (setq N (length Verts))
+                    (setq Nodes (LEP:CollectNodePoints))
+
+                    ;; Kill - список индексов вершин на удаление.
+                    (setq Kill nil)
+                    (setq i 1) ; первую не трогаем никогда
+
+                    (while (< i (1- N))
+
+                        (if (not (LEP:VertexHasNode (nth i Verts) Nodes))
+                            (progn
+                                ;; Есть ли рядом вершина, в которой блок
+                                ;; РЕАЛЬНО стоит? Если да - наша лишняя.
+                                (setq HasNodeNear nil)
+                                (setq j 0)
+                                (while (< j N)
+                                    (if (and (/= j i)
+                                             (< (distance (nth i Verts) (nth j Verts)) *LEP-Dim-NodeGap*)
+                                             (LEP:VertexHasNode (nth j Verts) Nodes)
+                                        )
+                                        (setq HasNodeNear T)
+                                    )
+                                    (setq j (1+ j))
+                                )
+                                (if HasNodeNear
+                                    (setq Kill (append Kill (list i)))
+                                )
+                            )
+                        )
+
+                        (setq i (1+ i))
+                    )
+
+                    (if (not Kill)
+                        (progn
+                            (princ (strcat "\n[LEP-ROUTE-CLEAN] Маршрут " (if RouteID RouteID "?")
+                                           ": вершин " (itoa N) ", лишних не найдено."))
+                            (LEP:PrintFooter)
+                        )
+                        (progn
+
+                            (princ (strcat "\n[LEP-ROUTE-CLEAN] Маршрут " (if RouteID RouteID "?")
+                                           ": вершин " (itoa N) ", из них лишних " (itoa (length Kill)) "."))
+                            (foreach i Kill
+                                (princ
+                                    (strcat "\n  вершина " (itoa i)
+                                            " - до предыдущей вершины "
+                                            (rtos (distance (nth i Verts) (nth (1- i) Verts)) 2 2)
+                                            " м"
+                                    )
+                                )
+                            )
+                            (princ "\n[LEP-ROUTE-CLEAN] ⚠️ Опоры привязаны к вершинам связью GEOMCONSTRAINT. После уборки ПРОВЕРЬТЕ, что опоры на месте; если съехали - Ctrl+Z.")
+
+                            ;; ⚠️ Скобки в строке getkword - ТОЛЬКО список
+                            ;; ответов, префикс отдельным princ ДО initget
+                            ;; (иначе Dynamic Input покажет у курсора
+                            ;; "LEP-ROUTE-CLEAN" вместо "Да"/"Нет").
+                            (initget "Да Нет")
+                            (setq Answer (getkword "\nУдаляем лишние вершины? [Да/Нет] <Нет>: "))
+
+                            (if (/= Answer "Да")
+                                (progn
+                                    (princ "\n[LEP-ROUTE-CLEAN] Отменено, чертёж не тронут.")
+                                    (LEP:PrintFooter)
+                                )
+                                (progn
+
+                                    ;; Перестраиваем DXF-данные полилинии.
+                                    ;;
+                                    ;; ⚠️ Удалять надо не только саму группу
+                                    ;; 10, но и хвост вершины - группы 40/41
+                                    ;; (ширины) и 42 (bulge), которые идут
+                                    ;; ПОСЛЕ неё до следующей 10. Иначе они
+                                    ;; переехали бы на чужую вершину и
+                                    ;; полилиния поехала бы шириной/дугой.
+                                    ;; У наших трасс их обычно нет вовсе, но
+                                    ;; закладываться на это нельзя: подложку
+                                    ;; и трассы рисуют по-разному.
+                                    (setq Data (entget Route))
+                                    (setq NewData nil)
+                                    (setq VIdx -1)
+                                    (setq Skip nil)
+
+                                    (foreach Item Data
+                                        (cond
+                                            ((= (car Item) 10)
+                                                (setq VIdx (1+ VIdx))
+                                                (setq Skip (if (member VIdx Kill) T nil))
+                                                (if (not Skip)
+                                                    (setq NewData (append NewData (list Item)))
+                                                )
+                                            )
+                                            ((member (car Item) '(40 41 42))
+                                                (if (not Skip)
+                                                    (setq NewData (append NewData (list Item)))
+                                                )
+                                            )
+                                            ((= (car Item) 90)
+                                                (setq NewData
+                                                    (append NewData
+                                                        (list (cons 90 (- N (length Kill))))
+                                                    )
+                                                )
+                                            )
+                                            (t (setq NewData (append NewData (list Item))))
+                                        )
+                                    )
+
+                                    (entmod NewData)
+                                    (entupd Route)
+
+                                    (setq Removed (length Kill))
+                                    (princ (strcat "\n[LEP-ROUTE-CLEAN] Удалено вершин: " (itoa Removed)
+                                                   ", осталось " (itoa (- N Removed)) "."))
+                                    (princ "\n[LEP-ROUTE-CLEAN] ⚠️ Уже нарисованные размеры и подписи НЕ пересчитаны - лишний размер сотрите руками или перечертите пролёт.")
+                                    (LEP:PrintFooter)
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+        )
+    )
+
+    (princ)
+)
+
+
+(princ "\nLEP-ROUTE v1.1 загружен (Escape во время PLINE больше не срывает создание маршрута молча; LEP-ROUTE-CLEAN).")
 
 (princ)
