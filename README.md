@@ -65,6 +65,7 @@ To reload after editing the code without reopening the drawing: `APPLOAD` →
 | `LEP-POLE-MOVE` / `LEP-POLE-DELETE` | move or delete a pole with its label and struts |
 | `LEP-SPAN` | wire the spans between poles |
 | `LEP-SPAN-REPAIR` | rebuild span data after manual edits |
+| `LEP-SPAN-WIRE` | change the wire/cable brand on spans already drawn |
 | `LEP-END` | terminate the line — substation, meter box, kiosk |
 | `LEP-GEOPOINTS-EXTRACT` / `-DRAW` / `-CLEAR` | GPS points from GeoJSON |
 | `LEP-REPORT` | export the bill of materials to CSV |

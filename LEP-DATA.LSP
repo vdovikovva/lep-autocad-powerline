@@ -879,10 +879,97 @@
                 (cons "RAWLENGTH" RawLength)
                 (cons "POLE1HANDLE" Pole1)
                 (cons "POLE2HANDLE" Pole2)
-                (cons "LABELHANDLE" NewLabelHandle)
             )
+            ;; ⚠️ 2026-08-20: NewLabelHandle = nil - это ОСМЫСЛЕННЫЙ
+            ;; вызов "отвязать пролёт от его группы подписей", а не
+            ;; ошибка. Так делает C:LEP-SPAN-WIRE перед сменой марки:
+            ;; пока старая связь жива, LEP:FindGroupMembers (она сверяет
+            ;; ТОЛЬКО LABELHANDLE, марку не смотрит) затянула бы в новую
+            ;; группу и соседей со старой маркой.
+            ;; Ключ при этом не пишется ВООБЩЕ - пустой строкой его
+            ;; заменить нельзя: в AutoLISP "" это ИСТИНА, и проверки
+            ;; вида (if (LEP:GetDataValue E "LABELHANDLE") ...) по всему
+            ;; проекту начали бы срабатывать на пустых данных.
+            ;; Отдельная ветка нужна ровно затем, чтобы не ловить на
+            ;; каждый пролёт предупреждение LEP:SetDataValueToString
+            ;; "значение ключа не строка и не число".
+            (if NewLabelHandle (list (cons "LABELHANDLE" NewLabelHandle)) nil)
             (if Reserve (list (cons "RESERVE" Reserve)) nil)
             (if Method (list (cons "METHOD" Method)) nil)
+        )
+    )
+)
+
+
+;=====================================================================
+;
+; LEP:SetSpanWire     (НОВАЯ 2026-08-20)
+;
+; Переписывает XDATA пролёта, меняя ТОЛЬКО марку (WIRE) и сечение
+; (SECTION) - все остальные поля читаются и пишутся обратно как есть.
+; Тот же приём "прочитать всё - переписать всё же самое + изменённое
+; поле", что в LEP:SetSpanLabelHandle выше, и по той же причине:
+; LEP:SetData ПЕРЕЗАПИСЫВАЕТ XDATA ЦЕЛИКОМ, поэтому частичное
+; обновление без этого приёма стёрло бы длину, запас и хендлы опор.
+;
+; ЗАЧЕМ (просьба пользователя 2026-08-20): линия на 500 м уже
+; размечена пролётами, и тут выясняется, что вместо СИП-2 70 мм2 идёт
+; 95 мм2. До этой функции такое лечилось единственным способом -
+; стереть все пролёты и перекликать заново.
+;
+; ⚠️ ДЛИНЫ НЕ ТРОГАЕМ, И ЭТО НЕ ЗАБЫВЧИВОСТЬ. LENGTH/RAWLENGTH/RESERVE
+; считаются из геометрии трассы, класса напряжения и способа прокладки
+; (LEP:GetRealLength/LEP:GetEndReserve, LEP-SPAN.LSP) - от МАРКИ
+; провода они не зависят вообще. Сменился провод - трасса осталась той
+; же длины, и число фаз тоже (оно от класса напряжения).
+;
+; ⚠️ Слой тоже не трогаем - он определяется классом напряжения,
+; статусом и способом прокладки, а не маркой. Именно поэтому функция
+; НЕ ГОДИТСЯ для замены ВЛ на КЛ: там меняется слой, способ, запасы,
+; котлованы и подписи опор. Вызывающая сторона (C:LEP-SPAN-WIRE)
+; такую замену запрещает явно.
+;
+; ⚠️ LABELHANDLE переносится КАК ЕСТЬ. Пересборка подписи - забота
+; вызывающей стороны (LEP:FinalizeSpanLabel): подпись общая на группу
+; пролётов одной марки, и после смены марки у ЧАСТИ группы группы
+; надо пересобрать целиком, а не по одному пролёту.
+;
+;=====================================================================
+
+(defun LEP:SetSpanWire (Ent NewWire NewSection / RouteID Status LengthVal
+                            RawLength Reserve Pole1 Pole2 LabelHandle Method)
+
+    (setq RouteID     (LEP:GetDataValue Ent "ROUTE"))
+    (setq Status      (LEP:GetDataValue Ent "STATUS"))
+    (setq LengthVal   (LEP:GetDataValue Ent "LENGTH"))
+    (setq RawLength   (LEP:GetDataValue Ent "RAWLENGTH"))
+    (setq Reserve     (LEP:GetDataValue Ent "RESERVE"))
+    (setq Pole1       (LEP:GetDataValue Ent "POLE1HANDLE"))
+    (setq Pole2       (LEP:GetDataValue Ent "POLE2HANDLE"))
+    (setq LabelHandle (LEP:GetDataValue Ent "LABELHANDLE"))
+    (setq Method      (LEP:GetDataValue Ent "METHOD"))
+
+    (LEP:SetData Ent
+        (append
+            (list
+                (cons "TYPE" "SPAN")
+                (cons "ROUTE" RouteID)
+                (cons "STATUS" Status)
+                (cons "WIRE" NewWire)
+                (cons "SECTION" NewSection)
+                (cons "LENGTH" LengthVal)
+            )
+            ;; Поля, которых у старых пролётов может не быть вообще -
+            ;; дописываем только если реально были (см. тот же приём в
+            ;; LEP:ReassignSpanRoute выше). Записать их пустыми нельзя:
+            ;; в AutoLISP "" - ИСТИНА, и проверки вида
+            ;; (if (LEP:GetDataValue E "METHOD") ...) начали бы врать.
+            (if RawLength   (list (cons "RAWLENGTH" RawLength)) nil)
+            (if Reserve     (list (cons "RESERVE" Reserve)) nil)
+            (if Pole1       (list (cons "POLE1HANDLE" Pole1)) nil)
+            (if Pole2       (list (cons "POLE2HANDLE" Pole2)) nil)
+            (if LabelHandle (list (cons "LABELHANDLE" LabelHandle)) nil)
+            (if Method      (list (cons "METHOD" Method)) nil)
         )
     )
 )

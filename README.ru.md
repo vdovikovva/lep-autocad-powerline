@@ -63,6 +63,7 @@ LEP-SCALE  →  LEP-ROUTE  →  LEP-POLE  →  LEP-SPAN  →  LEP-END  →  LEP-
 | `LEP-POLE-MOVE` / `LEP-POLE-DELETE` | перенос и удаление опоры вместе с подписью и откосами |
 | `LEP-SPAN` | нарезка пролётов между опорами |
 | `LEP-SPAN-REPAIR` | пересборка данных пролёта после ручных правок |
+| `LEP-SPAN-WIRE` | смена марки провода/кабеля у уже начерченных пролётов |
 | `LEP-END` | окончание линии — подстанция, ЩУ, киоск |
 | `LEP-GEOPOINTS-EXTRACT` / `-DRAW` / `-CLEAR` | GPS-точки из GeoJSON |
 | `LEP-REPORT` | выгрузка ведомости в CSV |

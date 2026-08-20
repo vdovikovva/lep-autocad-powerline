@@ -3458,5 +3458,588 @@
 )
 
 
-(princ "\nLEP-SPAN v1.7 загружен (геометрическое определение маршрута, параллельный сдвиг проводов, Т-образное подключение, LEP-SPAN-REPAIR).")
+;=====================================================================
+; LEP:SelectAllSpans     (НОВАЯ 2026-08-20)
+;
+; Набор ВСЕХ пролётов чертежа - ВЛ и КЛ, проектируемых и существующих,
+; одним ssget по четырём слоям через запятую.
+;
+; Ровно этот же ssget уже стоял ЧЕТЫРЬМЯ копиями в этом файле
+; (LEP:GetSpanNeighbors, LEP:FindGroupMembers, LEP:FindSamePolePairSpans,
+; C:LEP-SPAN-REPAIR). Пятую копию заводить не стал - по правилу проекта
+; "перед добавлением новой функции проверь, нет ли уже похожей".
+; Старые четыре сознательно НЕ переписаны на неё: они работают, а
+; трогать рабочий код объединения подписей ради косметики - лишний
+; риск на ровном месте.
+;
+; ⚠️ Возвращает набор ВСЕХ полилиний на этих слоях, а не только
+; пролётов с XDATA. Отбор по TYPE="SPAN" - забота вызывающей стороны:
+; на слой пролёта могла попасть и нарисованная руками линия.
+;=====================================================================
+
+(defun LEP:SelectAllSpans (/)
+    (ssget "_X"
+        (list
+            '(0 . "LWPOLYLINE")
+            (cons 8
+                (strcat
+                    *LEP-Layer-Proj-VL* "," *LEP-Layer-Exist-VL* ","
+                    *LEP-Layer-Proj-KL* "," *LEP-Layer-Exist-KL*
+                )
+            )
+        )
+    )
+)
+
+
+;=====================================================================
+; C:LEP-SPAN-WIRE - СМЕНА МАРКИ ПРОВОДА/КАБЕЛЯ У ГОТОВЫХ ПРОЛЁТОВ
+;
+; ✅ ДОБАВЛЕНО 2026-08-20 по прямой просьбе пользователя: "линия в 500 м
+; уже размечена пролётами, а вдруг надо сменить СИП-2 70 мм2 на 95".
+;
+; ДО ЭТОЙ КОМАНДЫ такое лечилось только перечерчиванием всех пролётов
+; заново. Отредактировать текст выноски руками мало: марка живёт в ДВУХ
+; местах - в XDATA пролёта (WIRE/SECTION) и в тексте подписи. Правка
+; одного текста дала бы чертёж с новой маркой и ведомость со старой,
+; причём БЕЗ ЕДИНОГО ПРИЗНАКА ошибки на экране.
+;
+; ЧТО МЕНЯЕТСЯ: ровно WIRE + SECTION в XDATA и текст подписи.
+; ЧТО НЕ МЕНЯЕТСЯ И ПОЧЕМУ (решение пользователя 2026-08-20):
+;   - длины (LENGTH/RAWLENGTH/RESERVE) - считаются из геометрии, класса
+;     напряжения и способа прокладки; от марки не зависят;
+;   - число фаз - от класса напряжения;
+;   - слой, цвет, толщина - от класса x статуса x способа прокладки;
+;   - котлованы ГНБ и "+ подъём кабеля по опоре" - от типа прокладки.
+; Сменился провод - трасса осталась той же длины. Пересчёт длин задним
+; числом сюда не втаскиваем: это отдельная задача.
+;
+; ⚠️ ВЛ <-> КЛ ЭТОЙ КОМАНДОЙ НЕ МЕНЯЮТСЯ. Там другой слой, другой
+; способ прокладки, другие запасы, котлованы и подписи опор - это
+; перечерчивание, а не смена марки. Поэтому список марок-целей
+; берётся ПО ТИПУ уже нарисованных пролётов, и попасть в него марка
+; чужого типа физически не может.
+;
+; ⚠️ ГЛАВНАЯ ЛОВУШКА - ОБЪЕДИНЁННЫЕ ПОДПИСИ. Подпись у нас общая на
+; группу пролётов одной марки (LEP:FinalizeSpanLabel). Наивное "сменил
+; XDATA у части группы - позвал Finalize" сломало бы две вещи сразу:
+;   1. LEP:FindGroupMembers собирает группу ПО LABELHANDLE и марку НЕ
+;      ПРОВЕРЯЕТ - значит в новую группу затянуло бы и соседей со
+;      СТАРОЙ маркой, и они получили бы чужую подпись;
+;   2. у тех, кого не затянуло, LABELHANDLE указывал бы на стёртую
+;      подпись, и они остались бы без неё вовсе (ровно тот случай,
+;      ради которого существует C:LEP-SPAN-REPAIR).
+;
+; ПОЭТОМУ ПОРЯДОК ДЕЙСТВИЙ ТАКОЙ И ТОЛЬКО ТАКОЙ:
+;   1. собрать выбранные пролёты (Targets);
+;   2. добрать к ним ВСЕХ соседей по их текущим группам подписей
+;      (Affected) - даже тех, чью марку мы не меняем;
+;   3. стереть старые подписи этих групп и ОБНУЛИТЬ LABELHANDLE у всех
+;      участников - после этого ни одна группа не может собраться по
+;      устаревшей связи;
+;   4. сменить марку у Targets;
+;   5. пересобрать подписи, вызвав LEP:FinalizeSpanLabel по КАЖДОМУ
+;      участнику Affected.
+;
+; ⚠️ Почему на шаге 5 можно звать Finalize подряд по всем, не боясь
+; лишних подписей: каждый вызов удаляет подписи всей группы, которую
+; найдёт по АКТУАЛЬНЫМ хендлам, и ставит одну новую. Цепочка A-B-C
+; собирается за проход: Finalize(A) даёт подпись на A+B, дальше
+; Finalize(C) подхватывает уже собранную группу через новый
+; LABELHANDLE соседа B и переставляет одну общую на A+B+C. Лишняя
+; работа есть (выноска создаётся и удаляется несколько раз), лишних
+; объектов на чертеже не остаётся.
+;
+; ⚠️ РАЗНЫЕ КЛАССЫ НАПРЯЖЕНИЯ В ОДНОЙ ВЫБОРКЕ - ОТКАЗ (решение
+; пользователя). Списки марок у 10, 6 и 0,4 кВ разные, и молча
+; положить СИП-2 на десятку - именно та тихая ошибка, которую потом
+; ловят на объекте, а не на чертеже. Проверка касается только ВЛ: у
+; КЛ список марок один на все классы, делить там нечего.
+;
+; ⚠️ Ведомость после смены надо ВЫГРУЗИТЬ ЗАНОВО (LEP-REPORT) - старый
+; CSV сам себя не перепишет.
+;=====================================================================
+
+(defun C:LEP-SPAN-WIRE (/ Scope SS Targets Affected Ent i PickEnt PickRoute
+                          OldWire Marks Filtered Entry MarkChoice NewChoice NewWire
+                          NewSection RouteCache RouteID Route Verts VClass
+                          TypeCode TypeSet VClassSet WireList OldHandles H
+                          OldEnt M Changed Rebuilt Skipped Status P1Handle
+                          P2Handle Answer Bad)
+
+    (LEP:PrintHeader "Смена марки провода/кабеля")
+
+    ;;-----------------------------------------------------------------
+    ;; ШАГ 1. Область действия.
+    ;;-----------------------------------------------------------------
+    (setq Scope
+        (LEP:ChooseFromList
+            (list
+                (cons "Весь чертёж" "ALL")
+                (cons "Один маршрут (клик по любому его пролёту)" "ROUTE")
+                (cons "Выбрать пролёты рамкой" "PICK")
+            )
+            "Где менять марку"
+        )
+    )
+
+    (if (not Scope)
+        (progn
+            (princ "\n[LEP-SPAN-WIRE] Отменено.")
+            (LEP:PrintFooter)
+        )
+        (progn
+
+            ;;---------------------------------------------------------
+            ;; ШАГ 2. Набор пролётов-кандидатов.
+            ;;---------------------------------------------------------
+            (setq PickRoute nil)
+
+            (cond
+
+                ((= (cdr Scope) "ALL")
+                    (setq SS (LEP:SelectAllSpans))
+                )
+
+                ((= (cdr Scope) "PICK")
+                    ;; Фильтр по слоям стоит прямо в ssget - в выбор
+                    ;; рамкой иначе попала бы вся подоснова, и дальше
+                    ;; пришлось бы объяснять пользователю, почему
+                    ;; "выбрано 400 объектов, изменено 12".
+                    (princ "\n[LEP-SPAN-WIRE] Выберите пролёты (рамкой или по одному), затем Enter.")
+                    (setq SS
+                        (ssget
+                            (list
+                                '(0 . "LWPOLYLINE")
+                                (cons 8
+                                    (strcat
+                                        *LEP-Layer-Proj-VL* "," *LEP-Layer-Exist-VL* ","
+                                        *LEP-Layer-Proj-KL* "," *LEP-Layer-Exist-KL*
+                                    )
+                                )
+                            )
+                        )
+                    )
+                )
+
+                (t
+                    ;; Один маршрут: кликаем ЛЮБОЙ его пролёт и берём
+                    ;; ROUTE из XDATA. По самой полилинии маршрута
+                    ;; кликать нельзя - слой маршрутов обычно скрыт
+                    ;; (LEP-ROUTEVIS), а пролёты видны всегда.
+                    (setq PickEnt (car (entsel "\n[LEP-SPAN-WIRE] Клик по любому пролёту нужного маршрута: ")))
+                    (if (and PickEnt (= (LEP:GetDataValue PickEnt "TYPE") "SPAN"))
+                        (progn
+                            (setq PickRoute (LEP:GetDataValue PickEnt "ROUTE"))
+                            (setq SS (LEP:SelectAllSpans))
+                            (princ (strcat "\n[LEP-SPAN-WIRE] Маршрут: " (if PickRoute PickRoute "не определён")))
+                        )
+                        (progn
+                            (princ "\n[LEP-SPAN-WIRE] Это не пролёт - кликните по линии провода или кабеля.")
+                            (setq SS nil)
+                        )
+                    )
+                )
+            )
+
+            ;;---------------------------------------------------------
+            ;; ШАГ 3. Отбор настоящих пролётов (TYPE="SPAN"), при
+            ;; необходимости - ещё и по маршруту. На слое провода могла
+            ;; оказаться и линия, нарисованная руками: у неё нет XDATA,
+            ;; и трогать её нельзя.
+            ;;---------------------------------------------------------
+            (setq Targets nil)
+            (if SS
+                (progn
+                    (setq i 0)
+                    (repeat (sslength SS)
+                        (setq Ent (ssname SS i))
+                        (if (and (= (LEP:GetDataValue Ent "TYPE") "SPAN")
+                                 (or (not PickRoute)
+                                     (= (LEP:GetDataValue Ent "ROUTE") PickRoute)
+                                 )
+                            )
+                            (setq Targets (append Targets (list Ent)))
+                        )
+                        (setq i (1+ i))
+                    )
+                )
+            )
+
+            (if (not Targets)
+                (progn
+                    (princ "\n[LEP-SPAN-WIRE] Пролётов не найдено - менять нечего.")
+                    (LEP:PrintFooter)
+                )
+                (progn
+
+                    ;;-------------------------------------------------
+                    ;; ШАГ 4. Какие марки РЕАЛЬНО лежат в выборке.
+                    ;;
+                    ;; Список строится по чертежу, а не по конфигу, и
+                    ;; это принципиально: на чертеже могут лежать марки
+                    ;; из прежних версий конфига, которых в текущих
+                    ;; списках уже нет. Показать надо то, что есть.
+                    ;;-------------------------------------------------
+                    (setq Marks nil)
+                    (foreach Ent Targets
+                        (setq OldWire (LEP:GetDataValue Ent "WIRE"))
+                        (if OldWire
+                            (progn
+                                (setq Entry (assoc OldWire Marks))
+                                (if Entry
+                                    (setq Marks (subst (cons OldWire (1+ (cdr Entry))) Entry Marks))
+                                    (setq Marks (append Marks (list (cons OldWire 1))))
+                                )
+                            )
+                        )
+                    )
+
+                    ;; ⚠️ Пустой список марок - реальный случай: на слое
+                    ;; провода могли оказаться линии без XDATA. Меню из
+                    ;; нуля пунктов зациклило бы LEP:ChooseFromList на
+                    ;; "нет такого номера" (выход только через Enter),
+                    ;; поэтому отсекаем ДО вызова меню.
+                    (setq MarkChoice
+                        (if Marks
+                            (LEP:ChooseFromList
+                                (mapcar
+                                    '(lambda (Item)
+                                        (cons
+                                            (strcat (car Item) "  -  пролётов: " (itoa (cdr Item)))
+                                            (car Item)
+                                        )
+                                     )
+                                    Marks
+                                )
+                                "Какую марку меняем"
+                            )
+                            (progn
+                                (princ "\n[LEP-SPAN-WIRE] У найденных пролётов нет марки в XDATA - менять нечего.")
+                                nil
+                            )
+                        )
+                    )
+
+                    (if (not MarkChoice)
+                        (progn
+                            (princ "\n[LEP-SPAN-WIRE] Отменено.")
+                            (LEP:PrintFooter)
+                        )
+                        (progn
+
+                            (setq OldWire (cdr MarkChoice))
+
+                            ;; Оставляем только пролёты выбранной марки.
+                            (setq Filtered nil)
+                            (foreach Ent Targets
+                                (if (= (LEP:GetDataValue Ent "WIRE") OldWire)
+                                    (setq Filtered (append Filtered (list Ent)))
+                                )
+                            )
+                            (setq Targets Filtered)
+
+                            ;;-----------------------------------------
+                            ;; ШАГ 5. Тип прокладки и класс напряжения.
+                            ;; Кэш маршрутов - чтобы не сканировать слой
+                            ;; маршрутов заново на каждый пролёт
+                            ;; (тот же приём, что в C:LEP-SPAN-REPAIR).
+                            ;; Формат: ((RouteID Route Verts VClass) ...)
+                            ;;-----------------------------------------
+                            (setq TypeSet nil)
+                            (setq VClassSet nil)
+                            (setq RouteCache nil)
+                            (setq Bad nil)
+
+                            (foreach Ent Targets
+
+                                (setq TypeCode (LEP:GetSpanTypeCode Ent))
+                                (if (not (member TypeCode TypeSet))
+                                    (setq TypeSet (append TypeSet (list TypeCode)))
+                                )
+
+                                (setq RouteID (LEP:GetDataValue Ent "ROUTE"))
+                                (if (not RouteID)
+                                    (setq Bad "у одного из пролётов нет маршрута в XDATA (пролёт из очень старой версии программы)")
+                                    (progn
+                                        (setq Entry (assoc RouteID RouteCache))
+                                        (if (not Entry)
+                                            (progn
+                                                (setq Route (LEP:FindRouteByID RouteID))
+                                                (if Route
+                                                    (progn
+                                                        (setq Entry
+                                                            (list RouteID
+                                                                  Route
+                                                                  (LEP:GetVertices Route)
+                                                                  (LEP:GetDataValue Route "VCLASS")
+                                                            )
+                                                        )
+                                                        (setq RouteCache (append RouteCache (list Entry)))
+                                                    )
+                                                    (setq Bad (strcat "на чертеже не найден маршрут " RouteID " - без него подпись не пересобрать"))
+                                                )
+                                            )
+                                        )
+                                        ;; Класс собираем ТОЛЬКО у ВЛ:
+                                        ;; у КЛ список марок один на все
+                                        ;; классы, и делить там нечего.
+                                        (if (and Entry (= TypeCode "VL"))
+                                            (progn
+                                                (setq VClass (cadddr Entry))
+                                                (if (not (member VClass VClassSet))
+                                                    (setq VClassSet (append VClassSet (list VClass)))
+                                                )
+                                            )
+                                        )
+                                    )
+                                )
+                            )
+
+                            ;; Смешение ВЛ и КЛ в одной выборке в норме
+                            ;; невозможно (марки провода и кабеля не
+                            ;; совпадают текстом), но если данные битые -
+                            ;; лучше отказаться, чем положить кабель на
+                            ;; воздушный слой.
+                            (if (and (not Bad) (> (length TypeSet) 1))
+                                (setq Bad "в выборку попали и ВЛ, и КЛ - это разные слои и разные способы прокладки")
+                            )
+                            (if (and (not Bad) (> (length VClassSet) 1))
+                                (setq Bad "в выборку попали ВЛ разных классов напряжения - у них РАЗНЫЕ списки марок")
+                            )
+
+                            (if Bad
+                                (progn
+                                    (princ (strcat "\n[LEP-SPAN-WIRE] ⚠️ ОТМЕНА: " Bad "."))
+                                    (princ "\n[LEP-SPAN-WIRE] Что делать: сузьте область - выберите один маршрут или отметьте нужные пролёты рамкой.")
+                                    (LEP:PrintFooter)
+                                )
+                                (progn
+
+                                    ;;---------------------------------
+                                    ;; ШАГ 6. Куда меняем. Список - тот
+                                    ;; же, что и при создании пролёта
+                                    ;; (C:LEP-SPAN), по типу и классу.
+                                    ;;---------------------------------
+                                    (setq TypeCode (car TypeSet))
+                                    (setq VClass (car VClassSet))
+
+                                    (if (= TypeCode "VL")
+                                        (cond
+                                            ((= VClass "10") (setq WireList *LEP-WireTypes-VL-10*))
+                                            ((= VClass "6")  (setq WireList *LEP-WireTypes-VL-6*))
+                                            (t               (setq WireList *LEP-WireTypes-VL-04*))
+                                        )
+                                        (setq WireList *LEP-WireTypes-KL*)
+                                    )
+
+                                    (setq NewChoice (LEP:ChooseFromList WireList "На какую марку меняем"))
+
+                                    (cond
+
+                                        ((not NewChoice)
+                                            (princ "\n[LEP-SPAN-WIRE] Отменено.")
+                                            (LEP:PrintFooter)
+                                        )
+
+                                        ((= (car NewChoice) OldWire)
+                                            (princ "\n[LEP-SPAN-WIRE] Это та же самая марка - менять нечего.")
+                                            (LEP:PrintFooter)
+                                        )
+
+                                        (t
+                                            (setq NewWire (car NewChoice))
+                                            (setq NewSection (cdr NewChoice))
+
+                                            ;;-------------------------
+                                            ;; ШАГ 7. Подтверждение.
+                                            ;; Операция массовая и через
+                                            ;; U откатывается одним
+                                            ;; куском только пока не
+                                            ;; начал чертить дальше -
+                                            ;; спросить дешевле.
+                                            ;;
+                                            ;; ⚠️ Скобки в строке
+                                            ;; getkword - ТОЛЬКО список
+                                            ;; ответов, префикс идёт
+                                            ;; отдельным princ ДО
+                                            ;; initget (иначе Dynamic
+                                            ;; Input покажет у курсора
+                                            ;; "LEP-SPAN-WIRE" вместо
+                                            ;; "Да"/"Нет").
+                                            ;;-------------------------
+                                            (princ
+                                                (strcat
+                                                    "\n[LEP-SPAN-WIRE] Меняю \""
+                                                    OldWire "\" -> \"" NewWire
+                                                    "\" на пролётах: " (itoa (length Targets))
+                                                )
+                                            )
+                                            (initget "Да Нет")
+                                            (setq Answer (getkword "\nМеняем? [Да/Нет] <Да>: "))
+
+                                            (if (= Answer "Нет")
+                                                (progn
+                                                    (princ "\n[LEP-SPAN-WIRE] Отменено.")
+                                                    (LEP:PrintFooter)
+                                                )
+                                                (progn
+
+                                                    ;;-----------------
+                                                    ;; ШАГ 8. Кто ещё
+                                                    ;; сидит в тех же
+                                                    ;; группах подписей.
+                                                    ;; Подробное "зачем"
+                                                    ;; - в шапке команды.
+                                                    ;;-----------------
+                                                    (setq Affected Targets)
+                                                    (setq OldHandles nil)
+
+                                                    (foreach Ent Targets
+                                                        (setq H (LEP:GetDataValue Ent "LABELHANDLE"))
+                                                        (if (and H (not (member H OldHandles)))
+                                                            (progn
+                                                                (setq OldHandles (append OldHandles (list H)))
+                                                                (foreach M (LEP:FindGroupMembers H (LEP:GetDataValue Ent "ROUTE"))
+                                                                    (if (not (member M Affected))
+                                                                        (setq Affected (append Affected (list M)))
+                                                                    )
+                                                                )
+                                                            )
+                                                        )
+                                                    )
+
+                                                    ;;-----------------
+                                                    ;; ШАГ 9. Снести
+                                                    ;; старые подписи и
+                                                    ;; ОБНУЛИТЬ связь с
+                                                    ;; ними у всех
+                                                    ;; участников.
+                                                    ;;
+                                                    ;; ⚠️ handent на nil
+                                                    ;; ПАДАЕТ - в списке
+                                                    ;; только непустые
+                                                    ;; хендлы, см. шаг 8.
+                                                    ;; Хендл может
+                                                    ;; указывать на уже
+                                                    ;; стёртый объект -
+                                                    ;; тогда handent
+                                                    ;; вернёт nil, и это
+                                                    ;; нормально.
+                                                    ;;-----------------
+                                                    (foreach H OldHandles
+                                                        (setq OldEnt (handent H))
+                                                        (if OldEnt (entdel OldEnt))
+                                                    )
+                                                    (foreach Ent Affected
+                                                        (LEP:SetSpanLabelHandle Ent nil)
+                                                    )
+
+                                                    ;;-----------------
+                                                    ;; ШАГ 10. Собственно
+                                                    ;; смена марки.
+                                                    ;;-----------------
+                                                    (setq Changed 0)
+                                                    (foreach Ent Targets
+                                                        (LEP:SetSpanWire Ent NewWire NewSection)
+                                                        (setq Changed (1+ Changed))
+                                                    )
+
+                                                    ;;-----------------
+                                                    ;; ШАГ 11. Пересборка
+                                                    ;; подписей. Марка
+                                                    ;; берётся из XDATA
+                                                    ;; КАЖДОГО пролёта:
+                                                    ;; у изменённых она
+                                                    ;; новая, у соседей
+                                                    ;; осталась старая, и
+                                                    ;; группы разойдутся
+                                                    ;; сами собой.
+                                                    ;;-----------------
+                                                    (setq Rebuilt 0)
+                                                    (setq Skipped 0)
+
+                                                    (foreach Ent Affected
+
+                                                        (setq RouteID  (LEP:GetDataValue Ent "ROUTE"))
+                                                        (setq Status   (LEP:GetDataValue Ent "STATUS"))
+                                                        (setq P1Handle (LEP:GetDataValue Ent "POLE1HANDLE"))
+                                                        (setq P2Handle (LEP:GetDataValue Ent "POLE2HANDLE"))
+                                                        (setq Entry    (assoc RouteID RouteCache))
+
+                                                        ;; Соседи по группе - того же маршрута
+                                                        ;; (LEP:FindGroupMembers сверяет ROUTE),
+                                                        ;; так что в кэше они уже есть. Но если
+                                                        ;; вдруг нет - добираем, а не падаем.
+                                                        (if (and RouteID (not Entry))
+                                                            (progn
+                                                                (setq Route (LEP:FindRouteByID RouteID))
+                                                                (if Route
+                                                                    (progn
+                                                                        (setq Entry
+                                                                            (list RouteID
+                                                                                  Route
+                                                                                  (LEP:GetVertices Route)
+                                                                                  (LEP:GetDataValue Route "VCLASS")
+                                                                            )
+                                                                        )
+                                                                        (setq RouteCache (append RouteCache (list Entry)))
+                                                                    )
+                                                                )
+                                                            )
+                                                        )
+
+                                                        (setq Verts (if Entry (caddr Entry) nil))
+
+                                                        (if (and Verts P1Handle P2Handle Status)
+                                                            (progn
+                                                                (LEP:FinalizeSpanLabel
+                                                                    Ent
+                                                                    Verts
+                                                                    P1Handle
+                                                                    P2Handle
+                                                                    (LEP:GetSpanTypeCode Ent)
+                                                                    (LEP:GetDataValue Ent "WIRE")
+                                                                    Status
+                                                                )
+                                                                (setq Rebuilt (1+ Rebuilt))
+                                                            )
+                                                            (setq Skipped (1+ Skipped))
+                                                        )
+                                                    )
+
+                                                    ;;-----------------
+                                                    ;; ШАГ 12. Отчёт.
+                                                    ;;-----------------
+                                                    (princ (strcat "\n[LEP-SPAN-WIRE] Изменено пролётов: " (itoa Changed)))
+                                                    (princ (strcat "\n[LEP-SPAN-WIRE] Пересобрано подписей: " (itoa Rebuilt)))
+
+                                                    (if (> Skipped 0)
+                                                        (progn
+                                                            (princ (strcat "\n[LEP-SPAN-WIRE] ⚠️ Без подписи осталось пролётов: " (itoa Skipped)))
+                                                            (princ "\n[LEP-SPAN-WIRE] У них не хватает данных в XDATA (старые пролёты). Попробуйте LEP-SPAN-REPAIR.")
+                                                        )
+                                                    )
+
+                                                    (princ "\n[LEP-SPAN-WIRE] ⚠️ Длины НЕ пересчитывались - от марки они не зависят.")
+                                                    (princ "\n[LEP-SPAN-WIRE] ⚠️ Ведомость нужно выгрузить заново (LEP-REPORT).")
+                                                    (LEP:PrintFooter)
+                                                )
+                                            )
+                                        )
+                                    )
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+        )
+    )
+
+    (princ)
+)
+
+
+(princ "\nLEP-SPAN v1.8 загружен (геометрическое определение маршрута, параллельный сдвиг проводов, Т-образное подключение, LEP-SPAN-REPAIR, LEP-SPAN-WIRE).")
 (princ)
